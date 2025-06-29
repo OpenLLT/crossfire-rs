@@ -177,7 +177,10 @@ extern crate enum_dispatch;
 mod channel;
 mod locked_waker;
 pub use locked_waker::LockedWaker;
-mod collections;
+
+/// collections that can be re-used
+pub mod collections;
+
 mod waker_registry;
 
 #[cfg(feature = "profile")]
