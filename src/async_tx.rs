@@ -1,6 +1,5 @@
 use crate::channel::*;
 use crate::sink::AsyncSink;
-use crossbeam::channel::Sender;
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -46,8 +45,7 @@ use std::task::{Context, Poll};
 /// }
 /// ```
 pub struct AsyncTx<T> {
-    pub(crate) sender: Sender<T>,
-    pub(crate) shared: Arc<ChannelShared>,
+    pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
 }
@@ -72,6 +70,30 @@ impl<T> Drop for AsyncTx<T> {
     }
 }
 
+impl<T> AsyncTx<T> {
+    #[inline]
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self { shared, _phan: Default::default() }
+    }
+
+    /// Probe possible messages in the channel (not accurate)
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.shared.len()
+    }
+
+    /// Whether there's message in the channel (not accurate)
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.shared.is_empty()
+    }
+
+    #[inline]
+    pub fn into_sink(self) -> AsyncSink<T> {
+        AsyncSink::new(self)
+    }
+}
+
 impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Send message. Will await when channel is full.
     ///
@@ -83,11 +105,35 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         return SendFuture { tx: &self, item: Some(item), waker: None };
     }
 
-    /// Use send() instead
+    /// Try to send message, non-blocking
+    ///
+    /// Returns `Ok(())` when successful.
+    ///
+    /// Returns Err([TrySendError::Full]) on channel full for bounded channel.
+    ///
+    /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
+    #[inline]
+    pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
+        if self.shared.get_rx_count() == 0 {
+            return Err(TrySendError::Disconnected(item));
+        }
+        match self.shared.try_send(item) {
+            Err(item) => {
+                return Err(TrySendError::Full(item));
+            }
+            Ok(_) => {
+                self.shared.on_send();
+                return Ok(());
+            }
+        }
+    }
+
     #[inline(always)]
-    #[deprecated]
-    pub fn make_send_future<'a>(&'a self, item: T) -> SendFuture<'a, T> {
-        return SendFuture { tx: &self, item: Some(item), waker: None };
+    fn _return_full(&self, item: T) -> TrySendError<T> {
+        if self.shared.get_rx_count() == 0 {
+            return TrySendError::Disconnected(item);
+        }
+        return TrySendError::Full(item);
     }
 
     /// Waits for a message to be sent into the channel, but only for a limited time.
@@ -133,35 +179,32 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        //
-        // crossbeam-channel will check disconnected for us (if not raced)
-        let r = self.try_send(item);
-        if let Some(old_waker) = o_waker.take() {
-            // https://github.com/frostyplanet/crossfire-rs/issues/14
-            old_waker.cancel();
-        }
-        if let Err(TrySendError::Full(t)) = r {
-            item = t;
-        } else {
-            return r;
-        }
-        let waker = self.shared.reg_send_async(ctx);
-        // NOTE: The other side put something whie reg_send and did not see the waker,
-        // should check the channel again, otherwise might incur a dead lock.
-        let r = self.try_send(item);
-        if let Err(TrySendError::Full(t)) = r {
-            if self.shared.get_rx_count() == 0 {
-                // Check channel close before sleep, otherwise might block forever
-                // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
-                return Err(TrySendError::Disconnected(t));
+        for i in 0..2 {
+            match self.shared.try_send(item) {
+                Err(t) => {
+                    if i == 0 {
+                        if self.shared.reg_send_async(ctx, o_waker) {
+                            // waker is not consumed
+                            return Err(self._return_full(t));
+                        }
+                        // NOTE: The other side put something whie reg_send and did not see the waker,
+                        // should check the channel again, otherwise might incur a dead lock.
+                    } else {
+                        // No need to reg again
+                    }
+                    item = t;
+                    continue;
+                }
+                Ok(_) => {
+                    if let Some(old_waker) = o_waker.take() {
+                        self.shared.cancel_send_waker(old_waker);
+                    }
+                    self.shared.on_send();
+                    return Ok(());
+                }
             }
-            o_waker.replace(waker);
-            return Err(TrySendError::Full(t));
-        } else {
-            // Ok or Disconnected
-            self.shared.cancel_send_waker(waker);
         }
-        return r;
+        return Err(self._return_full(item));
     }
 
     /// Just for debugging purpose, to monitor queue size
@@ -169,48 +212,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     #[cfg(test)]
     pub fn get_waker_size(&self) -> (usize, usize) {
         return self.shared.get_waker_size();
-    }
-}
-
-impl<T> AsyncTx<T> {
-    #[inline]
-    pub(crate) fn new(sender: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        Self { sender, shared, _phan: Default::default() }
-    }
-
-    /// Try to send message, non-blocking
-    ///
-    /// Returns `Ok(())` when successful.
-    ///
-    /// Returns Err([TrySendError::Full]) on channel full for bounded channel.
-    ///
-    /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
-    #[inline]
-    pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        match self.sender.try_send(item) {
-            Err(e) => return Err(e),
-            Ok(_) => {
-                self.shared.on_send();
-                return Ok(());
-            }
-        }
-    }
-
-    /// Probe possible messages in the channel (not accurate)
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.sender.len()
-    }
-
-    /// Whether there's message in the channel (not accurate)
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.sender.is_empty()
-    }
-
-    #[inline]
-    pub fn into_sink(self) -> AsyncSink<T> {
-        AsyncSink::new(self)
     }
 }
 
@@ -430,14 +431,14 @@ impl<T: Unpin> Clone for MAsyncTx<T> {
     fn clone(&self) -> Self {
         let inner = &self.0;
         inner.shared.add_tx();
-        Self(AsyncTx::new(inner.sender.clone(), inner.shared.clone()))
+        Self(AsyncTx::new(inner.shared.clone()))
     }
 }
 
 impl<T> MAsyncTx<T> {
     #[inline]
-    pub(crate) fn new(send: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        Self(AsyncTx::new(send, shared))
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self(AsyncTx::new(shared))
     }
 }
 

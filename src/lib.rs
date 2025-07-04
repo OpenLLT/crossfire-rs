@@ -197,10 +197,11 @@ pub use crossbeam::channel::{SendError, SendTimeoutError, TrySendError};
 mod channel;
 mod collections;
 mod locked_waker;
+mod waker_registry;
+
 pub mod mpmc;
 pub mod mpsc;
 pub mod spsc;
-mod waker_registry;
 
 mod blocking_tx;
 pub use blocking_tx::*;

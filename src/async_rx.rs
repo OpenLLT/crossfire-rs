@@ -1,6 +1,5 @@
 use crate::channel::*;
 use crate::stream::AsyncStream;
-use crossbeam::channel::Receiver;
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -46,8 +45,7 @@ use std::task::{Context, Poll};
 /// }
 /// ```
 pub struct AsyncRx<T> {
-    pub(crate) recv: Receiver<T>,
-    pub(crate) shared: Arc<ChannelShared>,
+    pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
 }
@@ -74,8 +72,8 @@ impl<T> Drop for AsyncRx<T> {
 
 impl<T> AsyncRx<T> {
     #[inline]
-    pub(crate) fn new(recv: Receiver<T>, shared: Arc<ChannelShared>) -> Self {
-        Self { recv, shared, _phan: Default::default() }
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self { shared, _phan: Default::default() }
     }
 
     /// Receive message, will await when channel is empty.
@@ -127,32 +125,38 @@ impl<T> AsyncRx<T> {
     /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        match self.recv.try_recv() {
-            Err(e) => return Err(e),
-            Ok(i) => {
-                self.shared.on_recv();
-                return Ok(i);
+        if let Some(item) = self.shared.try_recv() {
+            self.shared.on_recv();
+            return Ok(item);
+        } else {
+            if self.shared.get_tx_count() == 0 {
+                return Err(TryRecvError::Disconnected);
             }
+            return Err(TryRecvError::Empty);
         }
     }
 
-    /// Use recv() instead.
     #[inline(always)]
-    #[deprecated]
-    pub fn make_recv_future<'a>(&'a self) -> ReceiveFuture<'a, T> {
-        return ReceiveFuture { rx: &self, waker: None };
+    fn _return_empty(&self) -> Result<T, TryRecvError> {
+        if self.shared.get_tx_count() == 0 {
+            if let Ok(item) = self.try_recv() {
+                return Ok(item);
+            }
+            return Err(TryRecvError::Disconnected);
+        }
+        return Err(TryRecvError::Empty);
     }
 
     /// Probe possible messages in the channel (not accurate)
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.recv.len()
+        self.shared.len()
     }
 
     /// Whether there's message in the channel (not accurate)
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.recv.is_empty()
+        self.shared.is_empty()
     }
 
     /// Internal function might change in the future. For public version, use AsyncStream::poll_item() instead
@@ -169,34 +173,31 @@ impl<T> AsyncRx<T> {
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let r = self.try_recv();
-        if let Some(old_waker) = o_waker.take() {
-            // https://github.com/frostyplanet/crossfire-rs/issues/14
-            old_waker.cancel();
-        }
-        if let Err(TryRecvError::Empty) = &r {
-        } else {
-            return r;
-        }
-        let waker = self.shared.reg_recv_async(ctx);
-        // NOTE: The other side put something whie reg_send and did not see the waker,
-        // should check the channel again, otherwise might incur a dead lock.
-        let r = self.try_recv();
-        if let Err(TryRecvError::Empty) = &r {
-            // Check channel close before sleep, otherwise might block forever
-            // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
-            if self.shared.get_tx_count() == 0 {
-                // Ensure all message is received.
-                if let Ok(msg) = self.try_recv() {
-                    return Ok(msg);
+        for i in 0..2 {
+            match self.shared.try_recv() {
+                None => {
+                    if i == 0 {
+                        if self.shared.reg_recv_async(ctx, o_waker) {
+                            // waker is not consumed
+                            return self._return_empty();
+                        }
+                        // NOTE: The other side put something whie reg_send and did not see the waker,
+                        // should check the channel again, otherwise might incur a dead lock.
+                    } else {
+                        // No need to reg again
+                    }
+                    continue;
                 }
-                return Err(TryRecvError::Disconnected);
+                Some(item) => {
+                    if let Some(old_waker) = o_waker.take() {
+                        self.shared.cancel_recv_waker(old_waker);
+                    }
+                    self.shared.on_recv();
+                    return Ok(item);
+                }
             }
-            o_waker.replace(waker);
-        } else {
-            self.shared.cancel_recv_waker(waker);
         }
-        return r;
+        return self._return_empty();
     }
 
     pub fn into_stream(self) -> AsyncStream<T>
@@ -373,7 +374,7 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
 
     #[inline(always)]
     fn try_recv(&self) -> Result<T, TryRecvError> {
-        AsyncRx::try_recv(self)
+        AsyncRx::<T>::try_recv(self)
     }
 
     #[inline(always)]
@@ -383,7 +384,7 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
 
     #[inline(always)]
     fn is_empty(&self) -> bool {
-        AsyncRx::is_empty(self)
+        AsyncRx::<T>::is_empty(self)
     }
 
     #[inline(always)]
@@ -419,7 +420,7 @@ impl<T> Clone for MAsyncRx<T> {
     fn clone(&self) -> Self {
         let inner = &self.0;
         inner.shared.add_rx();
-        Self(AsyncRx::new(inner.recv.clone(), inner.shared.clone()))
+        Self(AsyncRx::new(inner.shared.clone()))
     }
 }
 
@@ -431,8 +432,8 @@ impl<T> From<MAsyncRx<T>> for AsyncRx<T> {
 
 impl<T> MAsyncRx<T> {
     #[inline]
-    pub(crate) fn new(recv: Receiver<T>, shared: Arc<ChannelShared>) -> Self {
-        Self(AsyncRx::new(recv, shared))
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self(AsyncRx::new(shared))
     }
 
     #[inline]
