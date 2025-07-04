@@ -182,10 +182,11 @@ mod channel;
 mod locked_waker;
 pub use locked_waker::LockedWaker;
 mod collections;
+mod waker_registry;
+
 pub mod mpmc;
 pub mod mpsc;
 pub mod spsc;
-mod waker_registry;
 
 mod blocking_tx;
 pub use blocking_tx::*;
@@ -195,6 +196,7 @@ mod async_tx;
 pub use async_tx::*;
 mod async_rx;
 pub use async_rx::*;
+
 pub mod stream;
 
 #[cfg(test)]
