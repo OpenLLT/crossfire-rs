@@ -1,6 +1,6 @@
 use crate::collections::LockedQueue;
 use crate::locked_waker::*;
-use crossbeam::queue::ArrayQueue;
+use crossbeam_queue::ArrayQueue;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::Context;
 

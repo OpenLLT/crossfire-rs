@@ -170,13 +170,9 @@
 //! }
 //! ```
 
-extern crate crossbeam;
 extern crate futures;
 #[macro_use]
 extern crate enum_dispatch;
-
-pub use crossbeam::channel::{RecvError, RecvTimeoutError, TryRecvError};
-pub use crossbeam::channel::{SendError, SendTimeoutError, TrySendError};
 
 mod channel;
 mod locked_waker;
@@ -200,6 +196,8 @@ pub use async_tx::*;
 mod async_rx;
 pub use async_rx::*;
 
+mod crossbeam;
+pub use crossbeam::err::*;
 pub mod stream;
 
 #[cfg(test)]
