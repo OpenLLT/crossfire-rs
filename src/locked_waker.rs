@@ -196,12 +196,12 @@ impl WakerCache {
         return LockedWaker::new_async(ctx);
     }
 
+    #[inline(always)]
     pub(crate) fn new_blocking(&self) -> LockedWaker {
         if let Some(inner) = self.0.pop() {
             let _waker = inner.get_waker_mut();
             *_waker = WakerType::Blocking(thread::current());
             return LockedWaker(inner);
-
         }
         return LockedWaker::new_blocking();
     }

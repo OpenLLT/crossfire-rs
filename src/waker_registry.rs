@@ -16,14 +16,17 @@ pub trait RegistryTrait {
     fn is_empty(&self) -> bool;
 
     /// For async context
-    fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool;
+    fn reg_async(
+        &self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>, _cache: &WakerCache,
+    ) -> bool;
 
     /// For thread context
     fn reg_blocking(&self, _waker: &LockedWaker);
 
     fn clear_wakers(&self, _seq: u64);
 
-    fn cancel_waker(&self, _waker: LockedWaker);
+    #[inline(always)]
+    fn cancel_waker(&self, _waker: LockedWaker, _cache: &WakerCache) {}
 
     fn fire(&self);
 
@@ -50,7 +53,9 @@ impl RegistryTrait for RegistryDummy {
     }
 
     #[inline(always)]
-    fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool {
+    fn reg_async(
+        &self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>, _cache: &WakerCache,
+    ) -> bool {
         unreachable!();
     }
 
@@ -61,9 +66,6 @@ impl RegistryTrait for RegistryDummy {
 
     #[inline(always)]
     fn clear_wakers(&self, _seq: u64) {}
-
-    #[inline(always)]
-    fn cancel_waker(&self, _waker: LockedWaker) {}
 
     #[inline(always)]
     fn fire(&self) {}
@@ -97,7 +99,9 @@ impl RegistryTrait for RegistrySingle {
 
     /// return is_skip
     #[inline(always)]
-    fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
+    fn reg_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>, cache: &WakerCache,
+    ) -> bool {
         if let Some(_waker) = o_waker.as_ref() {
             // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
             // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
@@ -110,7 +114,7 @@ impl RegistryTrait for RegistrySingle {
                 return true;
             }
         }
-        let waker = LockedWaker::new_async(ctx);
+        let waker = cache.new_async(ctx);
         let weak = waker.weak();
         o_waker.replace(waker);
         self.cell.put(weak);
@@ -123,9 +127,10 @@ impl RegistryTrait for RegistrySingle {
     }
 
     #[inline(always)]
-    fn cancel_waker(&self, _waker: LockedWaker) {
+    fn cancel_waker(&self, waker: LockedWaker, cache: &WakerCache) {
         // Got to be it, because only one single thread.
         self.cell.clear();
+        cache.push(waker);
     }
 
     #[inline(always)]
@@ -203,7 +208,9 @@ impl RegistryTrait for RegistryMulti {
     }
 
     #[inline(always)]
-    fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
+    fn reg_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>, cache: &WakerCache,
+    ) -> bool {
         if let Some(_waker) = o_waker.as_ref() {
             // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
             // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
@@ -216,7 +223,7 @@ impl RegistryTrait for RegistryMulti {
                 return true;
             }
         }
-        let waker = LockedWaker::new_async(ctx);
+        let waker = cache.new_async(ctx);
         self.push(&waker);
         o_waker.replace(waker);
         false
@@ -228,9 +235,8 @@ impl RegistryTrait for RegistryMulti {
     }
 
     #[inline(always)]
-    fn cancel_waker(&self, waker: LockedWaker) {
-        // Just abandon and leave it to fire() to clean it
-        waker.cancel();
+    fn cancel_waker(&self, waker: LockedWaker, cache: &WakerCache) {
+        cache.push(waker);
     }
 
     /// Call when ReceiveFuture is cancelled.

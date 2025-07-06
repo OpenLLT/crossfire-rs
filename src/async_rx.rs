@@ -48,6 +48,7 @@ pub struct AsyncRx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    waker_cache: WakerCache,
 }
 
 unsafe impl<T: Send> Send for AsyncRx<T> {}
@@ -73,7 +74,7 @@ impl<T> Drop for AsyncRx<T> {
 impl<T> AsyncRx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
     }
 
     /// Receive message, will await when channel is empty.
@@ -178,7 +179,7 @@ impl<T> AsyncRx<T> {
             match self.shared.try_recv() {
                 None => {
                     if i == 0 {
-                        if self.shared.reg_recv_async(ctx, o_waker) {
+                        if self.shared.reg_recv_async(ctx, o_waker, &self.waker_cache) {
                             // waker is not consumed
                             return self._return_empty(o_waker);
                         }
@@ -191,7 +192,7 @@ impl<T> AsyncRx<T> {
                 }
                 Some(item) => {
                     if let Some(old_waker) = o_waker.take() {
-                        self.shared.cancel_recv_waker(old_waker);
+                        self.shared.cancel_recv_waker(old_waker, &self.waker_cache);
                     }
                     self.shared.on_recv();
                     return Ok(item);

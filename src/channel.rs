@@ -148,14 +148,18 @@ impl<T> ChannelShared<T> {
 
     /// Register waker for current rx
     #[inline(always)]
-    pub fn reg_recv_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
-        self.recvs.reg_async(ctx, o_waker)
+    pub fn reg_recv_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>, cache: &WakerCache,
+    ) -> bool {
+        self.recvs.reg_async(ctx, o_waker, cache)
     }
 
     /// Register waker for current tx
     #[inline(always)]
-    pub fn reg_send_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
-        self.senders.reg_async(ctx, o_waker)
+    pub fn reg_send_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>, cache: &WakerCache,
+    ) -> bool {
+        self.senders.reg_async(ctx, o_waker, cache)
     }
 
     #[inline(always)]
@@ -181,13 +185,13 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub fn cancel_recv_waker(&self, waker: LockedWaker) {
-        self.recvs.cancel_waker(waker);
+    pub fn cancel_recv_waker(&self, waker: LockedWaker, cache: &WakerCache) {
+        self.recvs.cancel_waker(waker, cache);
     }
 
     #[inline(always)]
-    pub fn cancel_send_waker(&self, waker: LockedWaker) {
-        self.senders.cancel_waker(waker);
+    pub fn cancel_send_waker(&self, waker: LockedWaker, cache: &WakerCache) {
+        self.senders.cancel_waker(waker, cache);
     }
 
     /// On timeout, clear dead wakers on sender queue

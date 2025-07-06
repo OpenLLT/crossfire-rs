@@ -49,6 +49,7 @@ pub struct AsyncTx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    pub(crate) waker_cache: WakerCache,
 }
 
 impl<T> fmt::Debug for AsyncTx<T> {
@@ -74,7 +75,7 @@ impl<T> Drop for AsyncTx<T> {
 impl<T> AsyncTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
     }
 
     /// Probe possible messages in the channel (not accurate)
@@ -188,7 +189,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             match self.shared.try_send(item) {
                 Err(()) => {
                     if i == 0 {
-                        if self.shared.reg_send_async(ctx, o_waker) {
+                        if self.shared.reg_send_async(ctx, o_waker, &self.waker_cache) {
                             // waker is not consumed
                             return self._return_full();
                         }
@@ -201,7 +202,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 }
                 Ok(_) => {
                     if let Some(old_waker) = o_waker.take() {
-                        self.shared.cancel_send_waker(old_waker);
+                        self.shared.cancel_send_waker(old_waker, &self.waker_cache);
                     }
                     self.shared.on_send();
                     return Poll::Ready(Ok(()));
