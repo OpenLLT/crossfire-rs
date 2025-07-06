@@ -43,6 +43,7 @@ pub struct Tx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    waker_cache: WakerCache,
 }
 
 unsafe impl<T: Send> Send for Tx<T> {}
@@ -77,6 +78,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
     pub(crate) fn _send_blocking(
         shared: &ChannelShared<T>, item: T, deadline: Option<Instant>,
+        waker_cache: Option<&WakerCache>,
     ) -> Result<(), SendTimeoutError<T>> {
         if shared.get_rx_count() == 0 {
             return Err(SendTimeoutError::Disconnected(item));
@@ -92,7 +94,7 @@ impl<T: Send + 'static> Tx<T> {
                     tx_stats!(_i, true);
                     return Ok(());
                 }
-                let waker = LockedWaker::new_blocking();
+                let waker = WakerCache::new_blocking(waker_cache);
                 debug_assert!(waker.is_waked());
                 let backoff = Backoff::new();
                 let retry_limit = 3;
@@ -101,6 +103,7 @@ impl<T: Send + 'static> Tx<T> {
                     _i += 1;
                     if shared.try_send(&_item).is_ok() {
                         shared.on_send();
+                        WakerCache::push(waker_cache, waker);
                         tx_stats!(_i, true);
                         return Ok(());
                     }
@@ -152,9 +155,11 @@ impl<T: Send + 'static> Tx<T> {
     ///
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        Self::_send_blocking(&self.shared, item, None).map_err(|err| match err {
-            SendTimeoutError::Disconnected(msg) => SendError(msg),
-            SendTimeoutError::Timeout(_) => unreachable!(),
+        Self::_send_blocking(&self.shared, item, None, Some(&self.waker_cache)).map_err(|err| {
+            match err {
+                SendTimeoutError::Disconnected(msg) => SendError(msg),
+                SendTimeoutError::Timeout(_) => unreachable!(),
+            }
         })
     }
 
@@ -193,7 +198,9 @@ impl<T: Send + 'static> Tx<T> {
     #[inline]
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
         match Instant::now().checked_add(timeout) {
-            Some(deadline) => Self::_send_blocking(&self.shared, item, Some(deadline)),
+            Some(deadline) => {
+                Self::_send_blocking(&self.shared, item, Some(deadline), Some(&self.waker_cache))
+            }
             None => self.try_send(item).map_err(|e| match e {
                 TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
                 TrySendError::Full(t) => SendTimeoutError::Timeout(t),
@@ -205,7 +212,7 @@ impl<T: Send + 'static> Tx<T> {
 impl<T> Tx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
     }
 
     /// Probe possible messages in the channel (not accurate)
