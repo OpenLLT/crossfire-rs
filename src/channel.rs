@@ -7,6 +7,7 @@ use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::Context;
+use std::time::Instant;
 
 pub(crate) enum Channel<T> {
     List(SegQueue<T>),
@@ -51,8 +52,8 @@ impl<T> Channel<T> {
     #[inline(always)]
     fn is_full(&self) -> bool {
         match self {
-            Self::List(_) => false,
             Self::Array(s) => s.is_full(),
+            Self::List(_) => false,
         }
     }
 }
@@ -64,7 +65,7 @@ pub struct ChannelShared<T> {
     inner: Channel<T>,
     pub(crate) senders: Registry,
     pub(crate) recvs: Registry,
-    pub(crate) bound_size: usize,
+    pub(crate) bound_size: Option<usize>,
 }
 
 impl<T: Send + 'static> ChannelShared<T> {
@@ -93,7 +94,7 @@ impl<T> ChannelShared<T> {
             rx_count: AtomicU64::new(1),
             senders,
             recvs,
-            bound_size: inner.capacity().unwrap_or(0),
+            bound_size: inner.capacity(),
             inner,
         })
     }
@@ -242,5 +243,23 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn clear_recv_wakers(&self, seq: u64) {
         self.recvs.clear_wakers(seq);
+    }
+}
+
+/// If timed out, returns false
+#[inline]
+pub fn wait_timeout(deadline: Option<Instant>) -> bool {
+    if let Some(end) = deadline {
+        let now = Instant::now();
+        if now < end {
+            let dur = end - now;
+            std::thread::park_timeout(dur);
+            true
+        } else {
+            false
+        }
+    } else {
+        std::thread::park();
+        true
     }
 }
