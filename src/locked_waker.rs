@@ -131,25 +131,25 @@ impl LockedWakerInner {
     }
 
     #[inline(always)]
-    pub fn wake(&self) -> bool {
+    pub fn wake(&self) -> u64 {
         if self.waked.swap(true, Ordering::SeqCst) {
-            return false;
+            return 0;
         }
         match self.get_waker() {
             WakerType::Async(waker) => waker.wake_by_ref(),
             WakerType::Blocking(th) => th.unpark(),
         }
-        true
+        self.seq.load(Ordering::Acquire)
     }
 }
 
 impl LockedWakerRef {
     #[inline(always)]
-    pub(crate) fn wake(&self) -> bool {
+    pub(crate) fn wake(&self) -> u64 {
         if let Some(w) = self.0.upgrade() {
             return w.wake();
         } else {
-            return false;
+            return 0;
         }
     }
 
@@ -234,7 +234,7 @@ impl WakerCell {
     #[inline(always)]
     pub fn wake(&self) -> bool {
         if let Some(waker) = self.0.pop() {
-            return waker.wake();
+            return waker.wake() > 0;
         }
         false
     }

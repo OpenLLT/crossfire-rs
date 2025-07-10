@@ -182,13 +182,19 @@ impl RegistryMulti {
     fn push(&self, waker: &LockedWaker) -> bool {
         let weak = waker.weak();
         let mut guard = self.inner.lock();
-        guard.seq += 1;
-        if guard.seq == 0 {
-            guard.seq += 1;
+        let mut seq = guard.seq.wrapping_add(1);
+        if seq == 0 {
+            seq = seq.wrapping_add(1);
         }
-        waker.set_seq(guard.seq);
-        self.control_seq.store(guard.seq, Ordering::Release);
-        let is_first = guard.queue.len() == 0;
+        guard.seq = seq;
+        waker.set_seq(seq);
+        let is_first;
+        if guard.queue.is_empty() {
+            self.control_seq.store(seq, Ordering::Release);
+            is_first = true;
+        } else {
+            is_first = false;
+        }
         guard.queue.push_back(weak);
         return is_first;
     }
@@ -255,9 +261,15 @@ impl RegistryTrait for RegistryMulti {
         }
         let mut guard = self.inner.lock();
         while let Some(item) = guard.queue.pop_front() {
-            if item.wake() {
-                return;
+            let seq = item.wake();
+            if seq == 0 {
+                continue;
             }
+            if guard.queue.is_empty() {
+                break;
+            }
+            self.control_seq.store(seq.wrapping_add(1), Ordering::Release);
+            return;
         }
         self.control_seq.store(0, Ordering::Release);
     }

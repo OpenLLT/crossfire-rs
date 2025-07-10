@@ -271,7 +271,8 @@ impl<T: Send + 'static> MTx<T> {
                 let mut control_seq =
                     if first { waker.get_seq() } else { shared.get_tx_control_seq() };
                 loop {
-                    if !first && !waker.is_waked() && control_seq > waker.get_seq() + 4 {
+                    if !first && !waker.is_waked() && control_seq.wrapping_add(4) < waker.get_seq()
+                    {
                         if shared.is_full() {
                             break;
                         }
