@@ -265,46 +265,36 @@ impl<T: Send + 'static> MTx<T> {
                 }
                 let waker = WakerCache::new_blocking(waker_cache);
                 debug_assert!(waker.is_waked());
-                let mut backoff;
                 let mut first = shared.reg_send_blocking(&waker);
-                if first {
-                    backoff = Backoff::new(3);
-                } else {
-                    backoff = Backoff::new(3);
-                }
+                let mut backoff = Backoff::new(6);
                 backoff.snooze();
+                let mut control_seq =
+                    if first { waker.get_seq() } else { shared.get_tx_control_seq() };
                 loop {
-                    loop {
-                        if waker.is_waked() || !shared.is_full() {
-                            if shared.try_send(&_item).is_ok() {
-                                shared.on_send();
-                                WakerCache::push(waker_cache, waker);
-                                tx_stats!(backoff.step(), true);
-                                return Ok(());
-                            }
-                        }
-                        if backoff.is_completed() {
+                    if !first && !waker.is_waked() && control_seq > waker.get_seq() + 4 {
+                        if shared.is_full() {
                             break;
                         }
-                        backoff.snooze();
                     }
-                    first = true;
-                    if waker.is_waked() {
-                        shared.reg_send_blocking(&waker);
+                    if shared.try_send(&_item).is_ok() {
+                        shared.on_send();
+                        WakerCache::push(waker_cache, waker);
+                        tx_stats!(backoff.step(), true);
+                        return Ok(());
                     }
+                    if backoff.is_completed() {
+                        break;
+                    }
+                    backoff.snooze();
+                    control_seq = shared.get_tx_control_seq();
+                }
+                loop {
                     if shared.get_rx_count() == 0 {
                         waker.cancel();
                         return Err(SendTimeoutError::Disconnected(unsafe {
                             _item.assume_init_read()
                         }));
                     }
-                    //let control_seq = shared.get_tx_control_seq();
-                    //if control_seq == 0 || control_seq == waker.get_seq() {
-                    if !shared.is_full() {
-                        continue;
-                    }
-                    //println!("sleep {}", waker.get_seq());
-                    //}
                     tx_stats!(backoff.step());
                     if !wait_timeout(deadline) {
                         if waker.abandon() {
@@ -315,7 +305,13 @@ impl<T: Send + 'static> MTx<T> {
                         }
                         return Err(SendTimeoutError::Timeout(unsafe { _item.assume_init_read() }));
                     }
-                    //println!("waked {}", waker.get_seq());
+                    if shared.try_send(&_item).is_ok() {
+                        shared.on_send();
+                        WakerCache::push(waker_cache, waker);
+                        tx_stats!(backoff.step(), true);
+                        return Ok(());
+                    }
+                    shared.reg_send_blocking(&waker);
                 }
             }
         } else {
