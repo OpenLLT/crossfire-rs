@@ -184,6 +184,9 @@ pub use locked_waker::LockedWaker;
 mod collections;
 mod waker_registry;
 
+#[cfg(feature = "profile")]
+pub use channel::ChannelStats;
+
 pub mod mpmc;
 pub mod mpsc;
 pub mod spsc;
