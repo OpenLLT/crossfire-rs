@@ -269,22 +269,21 @@ impl<T: Send + 'static> MTx<T> {
                 let mut backoff = Backoff::new(6);
                 let seq = waker.get_seq();
                 let mut control_seq = if first { seq } else { shared.get_tx_control_seq() };
-                backoff.snooze();
-                //                if first {
-                //                    std::hint::spin_loop();
-                //                } else {
-                //                    let mut dis = seq.wrapping_sub(control_seq);
-                //                    if dis > 5 {
-                //                        dis = 5;
-                //                    }
-                //                    for _ in 0..dis {
-                //                        std::hint::spin_loop();
-                //                    }
-                //                }
+                if first {
+                    backoff.snooze()
+                } else {
+                    let mut dis = seq.wrapping_sub(control_seq);
+                    if dis > 5 {
+                        dis = 5;
+                    }
+                    for _ in 0..1 << dis {
+                        std::hint::spin_loop();
+                    }
+                }
                 let mut init = true;
                 loop {
                     loop {
-                        if init && control_seq.wrapping_add(3) < seq {
+                        if init && control_seq.wrapping_add(5) < seq {
                             if shared.is_full() {
                                 break;
                             }
