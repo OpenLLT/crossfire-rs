@@ -228,23 +228,134 @@ impl<T> Tx<T> {
 /// Inherits [`Tx<T>`] and implements [Clone].
 ///
 /// You can use `into()` to convert it to `Tx<T>`.
-pub struct MTx<T>(pub(crate) Tx<T>);
+pub struct MTx<T> {
+    pub(crate) inner: Tx<T>,
+    waker_cache: WakerCache,
+}
 
 unsafe impl<T: Send> Sync for MTx<T> {}
 
 impl<T> MTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self(Tx::new(shared))
+        Self { inner: Tx::new(shared), waker_cache: WakerCache::new() }
+    }
+}
+
+impl<T: Send + 'static> MTx<T> {
+    #[inline(always)]
+    pub(crate) fn _send_blocking(
+        &self, item: T, deadline: Option<Instant>, waker_cache: Option<&WakerCache>,
+    ) -> Result<(), SendTimeoutError<T>> {
+        let shared = &self.shared;
+        if shared.get_rx_count() == 0 {
+            return Err(SendTimeoutError::Disconnected(item));
+        }
+        if let Some(bound_size) = shared.bound_size {
+            if bound_size == 0 {
+                todo!();
+            } else {
+                let _item = MaybeUninit::new(item);
+                if shared.get_tx_control_seq() == 0 {
+                    if shared.try_send(&_item).is_ok() {
+                        shared.on_send();
+                        tx_stats!(1, true);
+                        return Ok(());
+                    }
+                }
+                let waker = WakerCache::new_blocking(waker_cache);
+                debug_assert!(waker.is_waked());
+                let mut backoff = Backoff::new(0);
+                let mut first = shared.reg_send_blocking(&waker);
+                if first {
+                    backoff.set_limit(6);
+                } else {
+                    std::hint::spin_loop()
+                }
+                loop {
+                    if first || !shared.is_full() {
+                        loop {
+                            if shared.try_send(&_item).is_ok() {
+                                shared.on_send();
+                                WakerCache::push(waker_cache, waker);
+                                tx_stats!(backoff.step(), true);
+                                return Ok(());
+                            }
+                            if backoff.is_completed() {
+                                break;
+                            }
+                            backoff.snooze();
+                        }
+                    }
+                    first = true;
+                    if waker.is_waked() {
+                        shared.reg_send_blocking(&waker);
+                    }
+                    if shared.get_rx_count() == 0 {
+                        waker.cancel();
+                        return Err(SendTimeoutError::Disconnected(unsafe {
+                            _item.assume_init_read()
+                        }));
+                    }
+                    //let control_seq = shared.get_tx_control_seq();
+                    //if control_seq == 0 || control_seq == waker.get_seq() {
+                    if !shared.is_full() {
+                        continue;
+                    }
+                    //println!("sleep {}", waker.get_seq());
+                    //}
+                    tx_stats!(backoff.step());
+                    if !wait_timeout(deadline) {
+                        if waker.abandon() {
+                            // We are waked, but give up sending, should notify another sender for safety
+                            shared.on_recv();
+                        } else {
+                            shared.clear_send_wakers(waker.get_seq());
+                        }
+                        return Err(SendTimeoutError::Timeout(unsafe { _item.assume_init_read() }));
+                    }
+                    //println!("waked {}", waker.get_seq());
+                }
+            }
+        } else {
+            // unbounded
+            match Tx::_try_send(shared, item) {
+                Ok(_) => return Ok(()),
+                Err(_) => unreachable!(),
+            }
+        }
+    }
+
+    /// Waits for a message to be sent into the channel, but only for a limited time.
+    /// Will block when channel is full.
+    ///
+    /// The behavior is atomic, either message sent successfully or returned on error.
+    ///
+    /// Returns `Ok(())` when successful.
+    ///
+    /// Returns Err([SendTimeoutError::Timeout]) when the the operation timed out.
+    ///
+    /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
+    #[inline]
+    pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
+        match Instant::now().checked_add(timeout) {
+            Some(deadline) => {
+                Self::_send_blocking(&self, item, Some(deadline), Some(&self.waker_cache))
+            }
+            None => self.try_send(item).map_err(|e| match e {
+                TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
+                TrySendError::Full(t) => SendTimeoutError::Timeout(t),
+            }),
+        }
     }
 }
 
 impl<T: Unpin> Clone for MTx<T> {
     #[inline]
     fn clone(&self) -> Self {
-        let inner = &self.0;
+        let inner = &self.inner;
         inner.shared.add_tx();
-        Self(Tx::new(inner.shared.clone()))
+        Self::new(inner.shared.clone())
     }
 }
 
@@ -253,14 +364,14 @@ impl<T> Deref for MTx<T> {
 
     /// inherit all the functions of [Tx]
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner
     }
 }
 
 impl<T> DerefMut for MTx<T> {
     /// inherit all the functions of [Tx]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.inner
     }
 }
 
@@ -329,26 +440,29 @@ impl<T: Send + 'static> BlockingTxTrait<T> for Tx<T> {
 impl<T: Send + 'static> BlockingTxTrait<T> for MTx<T> {
     #[inline(always)]
     fn send(&self, item: T) -> Result<(), SendError<T>> {
-        self.0.send(item)
+        MTx::_send_blocking(&self, item, None, Some(&self.waker_cache)).map_err(|err| match err {
+            SendTimeoutError::Disconnected(msg) => SendError(msg),
+            SendTimeoutError::Timeout(_) => unreachable!(),
+        })
     }
 
     #[inline(always)]
     fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        self.0.try_send(item)
+        self.inner.try_send(item)
     }
 
     #[inline(always)]
     fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
-        self.0.send_timeout(item, timeout)
+        MTx::send_timeout(self, item, timeout)
     }
 
     #[inline(always)]
     fn len(&self) -> usize {
-        self.0.len()
+        self.inner.len()
     }
 
     #[inline(always)]
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.inner.is_empty()
     }
 }

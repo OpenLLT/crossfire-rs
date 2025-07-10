@@ -1,5 +1,6 @@
-use crate::collections::LockedQueue;
 use crate::locked_waker::*;
+use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::Context;
 
@@ -12,11 +13,13 @@ pub enum Registry {
 
 #[enum_dispatch]
 pub trait RegistryTrait {
+    fn get_control_seq(&self) -> u64;
+
     /// For async context
     fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool;
 
     /// For thread context
-    fn reg_blocking(&self, _waker: &LockedWaker);
+    fn reg_blocking(&self, _waker: &LockedWaker) -> bool;
 
     fn clear_wakers(&self, _seq: u64);
 
@@ -47,7 +50,12 @@ impl RegistryTrait for RegistryDummy {
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, _waker: &LockedWaker) {
+    fn reg_blocking(&self, _waker: &LockedWaker) -> bool {
+        unreachable!();
+    }
+
+    #[inline(always)]
+    fn get_control_seq(&self) -> u64 {
         unreachable!();
     }
 
@@ -82,6 +90,11 @@ impl RegistrySingle {
 }
 
 impl RegistryTrait for RegistrySingle {
+    #[inline(always)]
+    fn get_control_seq(&self) -> u64 {
+        unreachable!();
+    }
+
     /// return is_skip
     #[inline(always)]
     fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
@@ -103,8 +116,9 @@ impl RegistryTrait for RegistrySingle {
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, waker: &LockedWaker) {
+    fn reg_blocking(&self, waker: &LockedWaker) -> bool {
         self.cell.put(waker.weak());
+        true
     }
 
     #[inline(always)]
@@ -140,24 +154,52 @@ impl RegistryTrait for RegistrySingle {
     }
 }
 
+struct RegistryMultiInner {
+    queue: VecDeque<LockedWakerRef>,
+    seq: u64,
+}
+
 pub struct RegistryMulti {
-    queue: LockedQueue<LockedWakerRef>,
-    seq: AtomicU64,
     checking: AtomicBool,
+    // 0 is invalid for seq
+    control_seq: AtomicU64,
+    inner: Mutex<RegistryMultiInner>,
 }
 
 impl RegistryMulti {
     #[inline(always)]
     pub fn new() -> Registry {
         Registry::Multi(Self {
-            queue: LockedQueue::new(32),
-            seq: AtomicU64::new(0),
+            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
             checking: AtomicBool::new(false),
+            control_seq: AtomicU64::new(0),
         })
     }
 }
 
+impl RegistryMulti {
+    #[inline]
+    fn push(&self, waker: &LockedWaker) -> bool {
+        let weak = waker.weak();
+        let mut guard = self.inner.lock();
+        guard.seq += 1;
+        if guard.seq == 0 {
+            guard.seq += 1;
+        }
+        waker.set_seq(guard.seq);
+        self.control_seq.store(guard.seq, Ordering::Release);
+        let is_first = guard.queue.len() == 0;
+        guard.queue.push_back(weak);
+        return is_first;
+    }
+}
+
 impl RegistryTrait for RegistryMulti {
+    #[inline(always)]
+    fn get_control_seq(&self) -> u64 {
+        self.control_seq.load(Ordering::Acquire)
+    }
+
     #[inline(always)]
     fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
         let waker = {
@@ -173,14 +215,13 @@ impl RegistryTrait for RegistryMulti {
                 _waker
             }
         };
-        waker.set_seq(self.seq.fetch_add(1, Ordering::SeqCst));
-        self.queue.push(waker.weak());
+        self.push(waker);
         false
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, waker: &LockedWaker) {
-        self.queue.push(waker.weak());
+    fn reg_blocking(&self, waker: &LockedWaker) -> bool {
+        self.push(waker)
     }
 
     #[inline(always)]
@@ -197,7 +238,8 @@ impl RegistryTrait for RegistryMulti {
             // Other thread is cleaning
             return;
         }
-        while let Some(waker_ref) = self.queue.pop() {
+        let mut guard = self.inner.lock();
+        while let Some(waker_ref) = guard.queue.pop_front() {
             if waker_ref.try_to_clear(seq) {
                 // we do not known push back may have concurrent problem
                 break;
@@ -208,23 +250,31 @@ impl RegistryTrait for RegistryMulti {
 
     #[inline(always)]
     fn fire(&self) {
-        while let Some(waker) = self.queue.pop() {
-            if waker.wake() {
+        if self.control_seq.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        let mut guard = self.inner.lock();
+        while let Some(item) = guard.queue.pop_front() {
+            if item.wake() {
                 return;
             }
         }
+        self.control_seq.store(0, Ordering::Release);
     }
 
     #[inline(always)]
     fn close(&self) {
-        while let Some(waker) = self.queue.pop() {
+        let mut guard = self.inner.lock();
+        while let Some(waker) = guard.queue.pop_front() {
             waker.wake();
         }
+        self.control_seq.store(0, Ordering::Release);
     }
 
     /// return waker queue size
     #[inline(always)]
     fn get_size(&self) -> usize {
-        self.queue.len()
+        let guard = self.inner.lock();
+        guard.queue.len()
     }
 }

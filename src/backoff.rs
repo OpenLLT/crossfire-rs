@@ -39,6 +39,11 @@ impl Backoff {
     pub fn reset(&mut self) {
         self.step = 0;
     }
+
+    #[inline(always)]
+    pub fn set_limit(&mut self, limit: u32) {
+        self.limit = limit;
+    }
 }
 
 #[cfg(test)]

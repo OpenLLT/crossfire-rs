@@ -159,8 +159,8 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub fn reg_send_blocking(&self, waker: &LockedWaker) {
-        self.senders.reg_blocking(waker);
+    pub fn reg_send_blocking(&self, waker: &LockedWaker) -> bool {
+        self.senders.reg_blocking(waker)
     }
 
     #[inline(always)]
@@ -178,6 +178,11 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub fn on_recv(&self) {
         self.senders.fire();
+    }
+
+    #[inline(always)]
+    pub fn get_tx_control_seq(&self) -> u64 {
+        self.senders.get_control_seq()
     }
 
     #[inline(always)]
