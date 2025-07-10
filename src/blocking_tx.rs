@@ -268,33 +268,54 @@ impl<T: Send + 'static> MTx<T> {
                 let mut first = shared.reg_send_blocking(&waker);
                 let mut backoff = Backoff::new(6);
                 let seq = waker.get_seq();
-                backoff.snooze();
                 let mut control_seq = if first { seq } else { shared.get_tx_control_seq() };
+                backoff.snooze();
+                //                if first {
+                //                    std::hint::spin_loop();
+                //                } else {
+                //                    let mut dis = seq.wrapping_sub(control_seq);
+                //                    if dis > 5 {
+                //                        dis = 5;
+                //                    }
+                //                    for _ in 0..dis {
+                //                        std::hint::spin_loop();
+                //                    }
+                //                }
+                let mut init = true;
                 loop {
-                    if control_seq.wrapping_add(2) < seq {
-                        if shared.is_full() {
+                    loop {
+                        if init && control_seq.wrapping_add(3) < seq {
+                            if shared.is_full() {
+                                break;
+                            }
+                        }
+                        if shared.try_send(&_item).is_ok() {
+                            shared.on_send();
+                            WakerCache::push(waker_cache, waker);
+                            tx_stats!(backoff.step(), true);
+                            return Ok(());
+                        }
+                        if backoff.is_completed() {
                             break;
                         }
+                        backoff.snooze();
                     }
-                    if shared.try_send(&_item).is_ok() {
-                        shared.on_send();
-                        WakerCache::push(waker_cache, waker);
-                        tx_stats!(backoff.step(), true);
-                        return Ok(());
+                    if init {
+                        init = false;
+                        backoff.set_limit(2);
+                    } else {
+                        shared.reg_send_blocking(&waker);
+                        if shared.get_rx_count() == 0 {
+                            waker.cancel();
+                            return Err(SendTimeoutError::Disconnected(unsafe {
+                                _item.assume_init_read()
+                            }));
+                        }
+                        if !shared.is_full() {
+                            continue;
+                        }
                     }
-                    if backoff.is_completed() {
-                        break;
-                    }
-                    backoff.snooze();
-                    control_seq = shared.get_tx_control_seq();
-                }
-                loop {
-                    if shared.get_rx_count() == 0 {
-                        waker.cancel();
-                        return Err(SendTimeoutError::Disconnected(unsafe {
-                            _item.assume_init_read()
-                        }));
-                    }
+                    backoff.reset();
                     tx_stats!(backoff.step());
                     if !wait_timeout(deadline) {
                         if waker.abandon() {
@@ -305,13 +326,7 @@ impl<T: Send + 'static> MTx<T> {
                         }
                         return Err(SendTimeoutError::Timeout(unsafe { _item.assume_init_read() }));
                     }
-                    if shared.try_send(&_item).is_ok() {
-                        shared.on_send();
-                        WakerCache::push(waker_cache, waker);
-                        tx_stats!(backoff.step(), true);
-                        return Ok(());
-                    }
-                    shared.reg_send_blocking(&waker);
+                    control_seq = shared.get_tx_control_seq();
                 }
             }
         } else {
