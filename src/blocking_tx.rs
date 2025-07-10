@@ -265,11 +265,10 @@ impl<T: Send + 'static> MTx<T> {
                 }
                 let waker = WakerCache::new_blocking(waker_cache);
                 debug_assert!(waker.is_waked());
-                let mut first = shared.reg_send_blocking(&waker);
                 let mut backoff = Backoff::new(6);
+                let mut control_seq = shared.reg_send_blocking(&waker);
                 let seq = waker.get_seq();
-                let mut control_seq = if first { seq } else { shared.get_tx_control_seq() };
-                if first {
+                if control_seq == seq {
                     backoff.snooze()
                 } else {
                     let mut dis = seq.wrapping_sub(control_seq);

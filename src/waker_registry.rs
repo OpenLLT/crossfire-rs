@@ -19,7 +19,7 @@ pub trait RegistryTrait {
     fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool;
 
     /// For thread context
-    fn reg_blocking(&self, _waker: &LockedWaker) -> bool;
+    fn reg_blocking(&self, _waker: &LockedWaker) -> u64;
 
     fn clear_wakers(&self, _seq: u64);
 
@@ -50,7 +50,7 @@ impl RegistryTrait for RegistryDummy {
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, _waker: &LockedWaker) -> bool {
+    fn reg_blocking(&self, _waker: &LockedWaker) -> u64 {
         unreachable!();
     }
 
@@ -116,9 +116,9 @@ impl RegistryTrait for RegistrySingle {
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, waker: &LockedWaker) -> bool {
+    fn reg_blocking(&self, waker: &LockedWaker) -> u64 {
         self.cell.put(waker.weak());
-        true
+        0
     }
 
     #[inline(always)]
@@ -179,7 +179,7 @@ impl RegistryMulti {
 
 impl RegistryMulti {
     #[inline]
-    fn push(&self, waker: &LockedWaker) -> bool {
+    fn push(&self, waker: &LockedWaker) -> u64 {
         let weak = waker.weak();
         let mut guard = self.inner.lock();
         let mut seq = guard.seq.wrapping_add(1);
@@ -188,15 +188,14 @@ impl RegistryMulti {
         }
         guard.seq = seq;
         waker.set_seq(seq);
-        let is_first;
         if guard.queue.is_empty() {
             self.control_seq.store(seq, Ordering::Release);
-            is_first = true;
+            guard.queue.push_back(weak);
+            return seq;
         } else {
-            is_first = false;
+            guard.queue.push_back(weak);
+            return self.control_seq.load(Ordering::Acquire);
         }
-        guard.queue.push_back(weak);
-        return is_first;
     }
 }
 
@@ -226,7 +225,7 @@ impl RegistryTrait for RegistryMulti {
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, waker: &LockedWaker) -> bool {
+    fn reg_blocking(&self, waker: &LockedWaker) -> u64 {
         self.push(waker)
     }
 

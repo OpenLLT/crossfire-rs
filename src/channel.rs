@@ -159,7 +159,7 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub fn reg_send_blocking(&self, waker: &LockedWaker) -> bool {
+    pub fn reg_send_blocking(&self, waker: &LockedWaker) -> u64 {
         self.senders.reg_blocking(waker)
     }
 
