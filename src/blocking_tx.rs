@@ -1,5 +1,5 @@
+use crate::backoff::Backoff;
 use crate::{channel::*, tx_stats};
-use crossbeam_utils::Backoff;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -87,54 +87,49 @@ impl<T: Send + 'static> Tx<T> {
             if bound_size == 0 {
                 todo!();
             } else {
-                let mut _i = 0;
                 let _item = MaybeUninit::new(item);
                 if shared.try_send(&_item).is_ok() {
                     shared.on_send();
-                    tx_stats!(_i, true);
+                    tx_stats!(1, true);
                     return Ok(());
                 }
                 let waker = WakerCache::new_blocking(waker_cache);
                 debug_assert!(waker.is_waked());
-                let backoff = Backoff::new();
-                let retry_limit = 3;
+                let mut backoff = Backoff::new(6);
                 backoff.snooze();
                 loop {
-                    _i += 1;
-                    if shared.try_send(&_item).is_ok() {
-                        shared.on_send();
-                        WakerCache::push(waker_cache, waker);
-                        tx_stats!(_i, true);
-                        return Ok(());
-                    }
-                    tx_stats!(_i);
-                    if _i < retry_limit {
+                    loop {
+                        if shared.try_send(&_item).is_ok() {
+                            shared.on_send();
+                            WakerCache::push(waker_cache, waker);
+                            tx_stats!(_i, true);
+                            return Ok(());
+                        }
+                        if backoff.is_completed() {
+                            break;
+                        }
                         backoff.snooze();
+                    }
+                    shared.reg_send_blocking(&waker);
+                    if shared.get_rx_count() == 0 {
+                        waker.cancel();
+                        return Err(SendTimeoutError::Disconnected(unsafe {
+                            _item.assume_init_read()
+                        }));
+                    }
+                    if !shared.is_full() {
                         continue;
                     }
-                    if waker.is_waked() {
-                        shared.reg_send_blocking(&waker);
-                        continue;
-                    } else {
-                        if shared.get_rx_count() == 0 {
-                            waker.cancel();
-                            return Err(SendTimeoutError::Disconnected(unsafe {
-                                _item.assume_init_read()
-                            }));
+                    tx_stats!(backoff.step());
+                    backoff.reset();
+                    if !wait_timeout(deadline) {
+                        if waker.abandon() {
+                            // We are waked, but give up sending, should notify another sender for safety
+                            shared.on_recv();
+                        } else {
+                            shared.clear_send_wakers(waker.get_seq());
                         }
-                        _i = 0;
-                        backoff.reset();
-                        if !wait_timeout(deadline) {
-                            if waker.abandon() {
-                                // We are waked, but give up sending, should notify another sender for safety
-                                shared.on_recv();
-                            } else {
-                                shared.clear_send_wakers(waker.get_seq());
-                            }
-                            return Err(SendTimeoutError::Timeout(unsafe {
-                                _item.assume_init_read()
-                            }));
-                        }
+                        return Err(SendTimeoutError::Timeout(unsafe { _item.assume_init_read() }));
                     }
                 }
             }

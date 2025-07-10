@@ -178,6 +178,8 @@ mod channel;
 mod locked_waker;
 pub use locked_waker::LockedWaker;
 
+#[allow(dead_code)]
+mod backoff;
 /// collections that can be re-used
 pub mod collections;
 
