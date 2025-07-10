@@ -268,7 +268,7 @@ impl RegistryTrait for RegistryMulti {
             if guard.queue.is_empty() {
                 break;
             }
-            self.control_seq.store(seq.wrapping_add(1), Ordering::Release);
+            self.control_seq.store(seq, Ordering::Release);
             return;
         }
         self.control_seq.store(0, Ordering::Release);
