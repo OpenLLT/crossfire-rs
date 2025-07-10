@@ -265,27 +265,28 @@ impl<T: Send + 'static> MTx<T> {
                 }
                 let waker = WakerCache::new_blocking(waker_cache);
                 debug_assert!(waker.is_waked());
-                let mut backoff = Backoff::new(0);
+                let mut backoff;
                 let mut first = shared.reg_send_blocking(&waker);
                 if first {
-                    backoff.set_limit(6);
+                    backoff = Backoff::new(3);
                 } else {
-                    std::hint::spin_loop()
+                    backoff = Backoff::new(3);
                 }
+                backoff.snooze();
                 loop {
-                    if first || !shared.is_full() {
-                        loop {
+                    loop {
+                        if waker.is_waked() || !shared.is_full() {
                             if shared.try_send(&_item).is_ok() {
                                 shared.on_send();
                                 WakerCache::push(waker_cache, waker);
                                 tx_stats!(backoff.step(), true);
                                 return Ok(());
                             }
-                            if backoff.is_completed() {
-                                break;
-                            }
-                            backoff.snooze();
                         }
+                        if backoff.is_completed() {
+                            break;
+                        }
+                        backoff.snooze();
                     }
                     first = true;
                     if waker.is_waked() {
