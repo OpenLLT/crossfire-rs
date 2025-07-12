@@ -60,8 +60,8 @@ impl<T> Channel<T> {
 }
 
 pub struct ChannelShared<T> {
-    recvs: Registry,
-    senders: Registry,
+    pub senders: Registry,
+    pub recvs: Registry,
     tx_count: AtomicU64,
     rx_count: AtomicU64,
     inner: Channel<T>,
