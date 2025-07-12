@@ -1,6 +1,7 @@
-use crate::collections::LockedQueue;
 use crate::locked_waker::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use parking_lot::Mutex;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Context;
 
 #[enum_dispatch(RegistryTrait)]
@@ -12,6 +13,8 @@ pub enum Registry {
 
 #[enum_dispatch]
 pub trait RegistryTrait {
+    fn is_empty(&self) -> bool;
+
     /// For async context
     fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool;
 
@@ -41,6 +44,11 @@ impl RegistryDummy {
 }
 
 impl RegistryTrait for RegistryDummy {
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        true
+    }
+
     #[inline(always)]
     fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool {
         unreachable!();
@@ -82,6 +90,11 @@ impl RegistrySingle {
 }
 
 impl RegistryTrait for RegistrySingle {
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        !self.cell.exists()
+    }
+
     /// return is_skip
     #[inline(always)]
     fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
@@ -136,24 +149,50 @@ impl RegistryTrait for RegistrySingle {
     }
 }
 
+struct RegistryMultiInner {
+    queue: VecDeque<LockedWakerRef>,
+    seq: u64,
+}
+
 pub struct RegistryMulti {
-    queue: LockedQueue<LockedWakerRef>,
-    seq: AtomicU64,
     checking: AtomicBool,
+    // 0 is invalid for seq
+    is_empty: AtomicBool,
+    inner: Mutex<RegistryMultiInner>,
 }
 
 impl RegistryMulti {
     #[inline(always)]
     pub fn new() -> Registry {
         Registry::Multi(Self {
-            queue: LockedQueue::new(32),
-            seq: AtomicU64::new(0),
+            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
             checking: AtomicBool::new(false),
+            is_empty: AtomicBool::new(true),
         })
+    }
+
+    #[inline(always)]
+    fn push(&self, waker: &LockedWaker) {
+        let weak = waker.weak();
+        let mut guard = self.inner.lock();
+        let seq = guard.seq.wrapping_add(1);
+        guard.seq = seq;
+        waker.set_seq(seq);
+        if guard.queue.is_empty() {
+            self.is_empty.store(false, Ordering::Release);
+            guard.queue.push_back(weak);
+        } else {
+            guard.queue.push_back(weak);
+        }
     }
 }
 
 impl RegistryTrait for RegistryMulti {
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.is_empty.load(Ordering::Acquire)
+    }
+
     #[inline(always)]
     fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
         let waker = {
@@ -169,21 +208,24 @@ impl RegistryTrait for RegistryMulti {
                 _waker
             }
         };
-        waker.set_seq(self.seq.fetch_add(1, Ordering::SeqCst));
-        self.queue.push(waker.weak());
+        self.push(waker);
         false
     }
 
     #[inline(always)]
     fn reg_blocking(&self, waker: &LockedWaker) {
-        self.queue.push(waker.weak());
+        self.push(waker);
     }
 
     #[inline(always)]
     fn cancel_waker(&self, waker: &LockedWaker) {
+        if self.is_empty.load(Ordering::Acquire) {
+            return;
+        }
+        let mut guard = self.inner.lock();
         // Just abandon and leave it to fire() to clean it
         let seq = waker.get_seq();
-        if let Some(waker_ref) = self.queue.pop() {
+        if let Some(waker_ref) = guard.queue.pop_front() {
             waker_ref.try_to_clear(seq);
         }
     }
@@ -196,28 +238,41 @@ impl RegistryTrait for RegistryMulti {
             // Other thread is cleaning
             return;
         }
-        while let Some(waker_ref) = self.queue.pop() {
+        let mut guard = self.inner.lock();
+        while let Some(waker_ref) = guard.queue.pop_front() {
             if waker_ref.try_to_clear(seq) {
                 // we do not known push back may have concurrent problem
                 break;
             }
         }
+
         self.checking.store(false, Ordering::Release);
     }
 
     #[inline(always)]
     fn fire(&self) {
-        let seq = self.seq.load(Ordering::SeqCst).wrapping_sub(1);
-        while let Some(weak) = self.queue.pop() {
-            if let Some(waker) = weak.upgrade() {
-                if waker.wake() {
+        if self.is_empty.load(Ordering::Acquire) {
+            return;
+        }
+        let mut guard = self.inner.lock();
+        let seq = guard.seq;
+        while let Some(waker_ref) = guard.queue.pop_front() {
+            if guard.queue.is_empty() {
+                self.is_empty.store(true, Ordering::Release);
+                if waker_ref.wake() {
                     return;
                 }
-                // The latest seq in RegistryMulti is always last_waker.get_seq() +1
-                // Because some waker (issued by sink / stream) might be INIT all the time,
-                // prevent to dead loop situation when they are wake up and re-register again.
-                if waker.get_seq() >= seq {
-                    return;
+            } else {
+                if let Some(waker) = waker_ref.upgrade() {
+                    if waker.wake() {
+                        return;
+                    }
+                    // The latest seq in RegistryMulti is always last_waker.get_seq() +1
+                    // Because some waker (issued by sink / stream) might be INIT all the time,
+                    // prevent to dead loop situation when they are wake up and re-register again.
+                    if waker.get_seq().wrapping_add(1) == seq {
+                        return;
+                    }
                 }
             }
         }
@@ -225,14 +280,17 @@ impl RegistryTrait for RegistryMulti {
 
     #[inline(always)]
     fn close(&self) {
-        while let Some(waker) = self.queue.pop() {
+        let mut guard = self.inner.lock();
+        while let Some(waker) = guard.queue.pop_front() {
             waker.wake();
         }
+        self.is_empty.store(true, Ordering::Release);
     }
 
     /// return waker queue size
     #[inline(always)]
     fn len(&self) -> usize {
-        self.queue.len()
+        let guard = self.inner.lock();
+        guard.queue.len()
     }
 }
