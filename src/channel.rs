@@ -60,8 +60,8 @@ impl<T> Channel<T> {
 }
 
 pub struct ChannelShared<T> {
-    recvs: Registry,
-    senders: Registry,
+    pub senders: RegistrySender,
+    pub recvs: RegistryRecv,
     tx_count: AtomicU64,
     rx_count: AtomicU64,
     inner: Channel<T>,
@@ -87,7 +87,7 @@ impl<T: Send + 'static> ChannelShared<T> {
 }
 
 impl<T> ChannelShared<T> {
-    pub fn new(inner: Channel<T>, senders: Registry, recvs: Registry) -> Arc<Self> {
+    pub fn new(inner: Channel<T>, senders: RegistrySender, recvs: RegistryRecv) -> Arc<Self> {
         Arc::new(Self {
             tx_count: AtomicU64::new(1),
             rx_count: AtomicU64::new(1),
@@ -159,8 +159,8 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub fn reg_send_blocking(&self, waker: &LockedWaker) {
-        self.senders.reg_blocking(waker);
+    pub fn reg_send_blocking(&self, waker: &LockedWaker) -> bool {
+        self.senders.reg_blocking(waker)
     }
 
     #[inline(always)]
