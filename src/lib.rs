@@ -104,12 +104,20 @@
 //!
 //! Tested on tokio-1.x and async-std-1.x, by default we do not depend on any async runtime.
 //!
-//! In async context, tokio-select! or future-select! can be used.  Cancelling is supported. You can combine
+//! In async context, tokio-select! or future-select! can be used. Cancellation is supported. You can combine
 //! recv() future with tokio::time::timeout.
 //!
-//! When feature "tokio" or "async_std" enable, we also provide
-//! [send_timeout](crate::AsyncTx::send_timeout()) and
-//! [recv_timeout](crate::AsyncRx::recv_timeout())
+//! When feature "tokio" or "async_std" enable, we also provide two additional functions:
+//!
+//! - [send_timeout](crate::AsyncTx::send_timeout()), which will return the message failed to sent in
+//! [SendTimeoutError].
+//!
+//! - [recv_timeout](crate::AsyncRx::recv_timeout())
+//!
+//! Unlike the possibility in Kanal race condition on future cancellation, in crossfire,
+//! message will not be operated outside the context of poll() function, message only moved to, or from the queue in async context,
+//! we can **guarantee** that no message will be lost due to the cancellation of recv(), and no spuriously send failure that message
+//! actually copied to the receiver.
 //!
 //! While using MAsyncTx or MAsyncRx, there's memory overhead to pass along small size wakers
 //! for pending async producer or consumer. Because we aim to be lockless,
@@ -117,8 +125,8 @@
 //! might trigger immediate cleanup if non-conflict conditions are met.
 //! Otherwise will rely on lazy cleanup. (waker will be consumed by actual message send and recv).
 //!
-//! Never the less, for close notification without sending anything,
-//! I suggest that use `tokio::sync::oneshot` instead.
+//! Never the less, for close notification without sending anything, crossfire::mpmc can be heavy
+//! and I suggest that use `tokio::sync::oneshot` instead.
 //!
 //! ## Usage
 //!
@@ -127,7 +135,7 @@
 //! [dependencies]
 //! crossfire = "2.0"
 //! ```
-//! example:
+//! ### Example with tokio::select!
 //!
 //! ```rust
 //!
@@ -169,6 +177,14 @@
 //!     }
 //! }
 //! ```
+//!
+//! ### For Future customization
+//!
+//! The future object created by [AsyncTx::send()], [AsyncTx::send_timeout()], [AsyncRx::recv()],
+//! [AsyncRx::recv_timeout()] is `Sized`. You don't need to put them in `Box`.
+//!
+//! If you like to use poll function directly for complex behavior, you can call
+//! [AsyncSink::poll_send()](crate::sink::AsyncSink::poll_send()) or [AsyncStream::poll_item()](crate::stream::AsyncStream::poll_item()) with Context.
 
 extern crate crossbeam;
 extern crate futures;
