@@ -23,6 +23,14 @@ impl LockedWaker {
     }
 
     #[inline(always)]
+    pub(crate) fn will_wake(&self, ctx: &mut Context) -> bool {
+        if self.is_waked() {
+            return false;
+        }
+        self.0._will_wake(ctx)
+    }
+
+    #[inline(always)]
     pub(crate) fn new_blocking() -> Self {
         Self(Arc::new(LockedWakerInner {
             seq: AtomicU64::new(0),
@@ -112,22 +120,12 @@ impl LockedWakerInner {
     }
 
     #[inline(always)]
-    pub fn update_blocking_waker(&self) {
-        let waker = self.get_waker_mut();
-        *waker = WakerType::Blocking(thread::current());
-    }
-
-    #[inline(always)]
-    pub fn update_async_waker(&self, ctx: &Context) {
-        let waker = self.get_waker_mut();
+    fn _will_wake(&self, ctx: &mut Context) -> bool {
+        let waker = self.get_waker();
         if let WakerType::Async(_waker) = waker {
-            if _waker.will_wake(ctx.waker()) {
-                return;
-            }
-        } else {
-            unreachable!();
+            return _waker.will_wake(ctx.waker());
         }
-        *waker = WakerType::Async(ctx.waker().clone());
+        unreachable!()
     }
 
     #[inline(always)]
@@ -187,11 +185,23 @@ impl WakerCache {
     }
 
     #[inline(always)]
+    pub(crate) fn new_async(&self, ctx: &mut Context) -> LockedWaker {
+        if let Some(inner) = self.0.pop() {
+            if !inner._will_wake(ctx) {
+                let _waker = inner.get_waker_mut();
+                *_waker = WakerType::Async(ctx.waker().clone());
+            }
+            return LockedWaker(inner);
+        }
+        return LockedWaker::new_async(ctx);
+    }
+
     pub(crate) fn new_blocking(&self) -> LockedWaker {
         if let Some(inner) = self.0.pop() {
             let _waker = inner.get_waker_mut();
             *_waker = WakerType::Blocking(thread::current());
             return LockedWaker(inner);
+
         }
         return LockedWaker::new_blocking();
     }
