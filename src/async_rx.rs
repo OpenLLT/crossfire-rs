@@ -7,7 +7,10 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicI8, Ordering},
+    Arc,
+};
 use std::task::{Context, Poll};
 
 /// Single consumer (receiver) that works in async context.
@@ -56,6 +59,7 @@ pub struct AsyncRx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    backoff: AtomicI8,
 }
 
 unsafe impl<T: Send> Send for AsyncRx<T> {}
@@ -88,7 +92,17 @@ impl<T> From<Rx<T>> for AsyncRx<T> {
 impl<T> AsyncRx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, _phan: Default::default(), backoff: AtomicI8::new(-1) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn _detect_runtime(&self) -> u32 {
+        let mut backoff = self.backoff.load(Ordering::Relaxed);
+        if backoff < 0 {
+            backoff = self.shared.detect_async_backoff_rx();
+            self.backoff.store(backoff, Ordering::Release);
+        }
+        return backoff as u32;
     }
 
     /// Receive message, will await when channel is empty.
@@ -162,12 +176,11 @@ impl<T> AsyncRx<T> {
     pub(crate) fn poll_item(
         &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>, stream: bool,
     ) -> Result<T, TryRecvError> {
-        let shared = &self.shared;
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let try_times = if shared.bound_size <= Some(2) { 5 } else { 1 };
-        let mut backoff = Backoff::new(try_times);
+        let shared = &self.shared;
+        let mut backoff = Backoff::new(self._detect_runtime());
         loop {
             if let Some(item) = shared.try_recv() {
                 shared.on_recv();
