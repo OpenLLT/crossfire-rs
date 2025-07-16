@@ -8,7 +8,10 @@ use std::marker::PhantomData;
 use std::mem::{needs_drop, MaybeUninit};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicI8, Ordering},
+    Arc,
+};
 use std::task::{Context, Poll};
 
 /// Single producer (sender) that works in async context.
@@ -52,6 +55,7 @@ pub struct AsyncTx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    backoff: AtomicI8,
 }
 
 impl<T> fmt::Debug for AsyncTx<T> {
@@ -84,7 +88,17 @@ impl<T> From<Tx<T>> for AsyncTx<T> {
 impl<T> AsyncTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, _phan: Default::default(), backoff: AtomicI8::new(-1) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn _detect_runtime(&self) -> u32 {
+        let mut backoff = self.backoff.load(Ordering::Relaxed);
+        if backoff < 0 {
+            backoff = self.shared.detect_async_backoff_tx();
+            self.backoff.store(backoff, Ordering::Release);
+        }
+        return backoff as u32;
     }
 
     #[inline]
@@ -101,7 +115,12 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns Err([SendError]) when all Rx is dropped.
     #[inline(always)]
     pub fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
-        return SendFuture { shared: &self.shared, item: MaybeUninit::new(item), waker: None };
+        return SendFuture {
+            shared: &self.shared,
+            item: MaybeUninit::new(item),
+            waker: None,
+            backoff: self._detect_runtime(),
+        };
     }
 
     /// Try to send message, non-blocking
@@ -159,6 +178,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             item: MaybeUninit::new(item),
             waker: None,
             sleep,
+            backoff: self._detect_runtime(),
         };
     }
 
@@ -172,7 +192,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     #[inline(always)]
     pub(crate) fn poll_send<'a>(
         shared: &'a ChannelShared<T>, ctx: &'a mut Context, item: &MaybeUninit<T>,
-        o_waker: &'a mut Option<LockedWaker>,
+        o_waker: &'a mut Option<LockedWaker>, backoff_limit: u32,
     ) -> Poll<Result<(), ()>> {
         if shared.is_disconnected() {
             return Poll::Ready(Err(()));
@@ -180,8 +200,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let try_times = if shared.bound_size <= Some(2) { 5 } else { 1 };
-        let mut backoff = Backoff::new(try_times);
+        let mut backoff = Backoff::new(backoff_limit);
         loop {
             if shared.try_send(item).is_ok() {
                 shared.on_send();
@@ -216,6 +235,7 @@ pub struct SendFuture<'a, T: Unpin> {
     shared: &'a ChannelShared<T>,
     item: MaybeUninit<T>,
     waker: Option<LockedWaker>,
+    backoff: u32,
 }
 
 unsafe impl<T: Unpin + Send> Send for SendFuture<'_, T> {}
@@ -244,7 +264,7 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match AsyncTx::poll_send(&_self.shared, ctx, &_self.item, &mut _self.waker) {
+        match AsyncTx::poll_send(&_self.shared, ctx, &_self.item, &mut _self.waker, _self.backoff) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
                 return Poll::Ready(Ok(()));
@@ -265,6 +285,7 @@ pub struct SendTimeoutFuture<'a, T: Unpin> {
     shared: &'a ChannelShared<T>,
     item: MaybeUninit<T>,
     waker: Option<LockedWaker>,
+    backoff: u32,
     #[cfg(feature = "tokio")]
     sleep: Pin<Box<tokio::time::Sleep>>,
     #[cfg(not(feature = "tokio"))]
@@ -297,7 +318,8 @@ impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        let r = AsyncTx::poll_send(&_self.shared, ctx, &_self.item, &mut _self.waker);
+        let r =
+            AsyncTx::poll_send(&_self.shared, ctx, &_self.item, &mut _self.waker, _self.backoff);
         match r {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
