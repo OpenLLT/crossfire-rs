@@ -137,9 +137,10 @@ impl<T> AsyncRx<T> {
     }
 
     #[inline(always)]
-    fn _return_empty(&self) -> Result<T, TryRecvError> {
+    fn _return_empty(&self, o_waker: &mut Option<LockedWaker>) -> Result<T, TryRecvError> {
         if self.shared.get_tx_count() == 0 {
             if let Ok(item) = self.try_recv() {
+                let _ = o_waker.take();
                 return Ok(item);
             }
             return Err(TryRecvError::Disconnected);
@@ -179,7 +180,7 @@ impl<T> AsyncRx<T> {
                     if i == 0 {
                         if self.shared.reg_recv_async(ctx, o_waker) {
                             // waker is not consumed
-                            return self._return_empty();
+                            return self._return_empty(o_waker);
                         }
                         // NOTE: The other side put something whie reg_send and did not see the waker,
                         // should check the channel again, otherwise might incur a dead lock.
@@ -197,7 +198,7 @@ impl<T> AsyncRx<T> {
                 }
             }
         }
-        return self._return_empty();
+        return self._return_empty(o_waker);
     }
 
     pub fn into_stream(self) -> AsyncStream<T>
