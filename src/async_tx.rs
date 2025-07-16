@@ -208,24 +208,6 @@ impl<T> AsyncTx<T> {
         self.sender.is_empty()
     }
 
-    /// Send a message while **blocking the current thread**. Be careful!
-    ///
-    /// Returns `Ok(())`on successful.
-    ///
-    /// Returns Err([SendError]) when all Rx is dropped.
-    ///
-    /// **NOTE: Do not use it in async context otherwise will block the runtime.**
-    #[inline]
-    pub fn send_blocking(&self, item: T) -> Result<(), SendError<T>> {
-        match self.sender.send(item) {
-            Ok(()) => {
-                self.shared.on_send();
-                return Ok(());
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
     #[inline]
     pub fn into_sink(self) -> AsyncSink<T> {
         AsyncSink::new(self)

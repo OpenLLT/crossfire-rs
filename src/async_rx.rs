@@ -212,24 +212,6 @@ impl<T> AsyncRx<T> {
     pub fn get_waker_size(&self) -> (usize, usize) {
         return self.shared.get_waker_size();
     }
-
-    /// Receive a message while **blocking the current thread**. Be careful!
-    ///
-    /// Returns `Ok(T)` on successful.
-    ///
-    /// Returns Err([RecvError]) when all Tx dropped.
-    ///
-    /// **NOTE: Do not use it in async context otherwise will block the runtime.**
-    #[inline(always)]
-    pub fn recv_blocking(&self) -> Result<T, RecvError> {
-        match self.recv.recv() {
-            Err(e) => return Err(e),
-            Ok(i) => {
-                self.shared.on_recv();
-                return Ok(i);
-            }
-        }
-    }
 }
 
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
