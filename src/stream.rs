@@ -49,7 +49,7 @@ where
         if self.ended {
             return Poll::Ready(None);
         }
-        match AsyncRx::poll_item(&self.rx.shared, ctx, &mut self.waker) {
+        match AsyncRx::poll_item(&self.rx.shared, ctx, &mut self.waker, self.rx._detect_runtime()) {
             Ok(item) => Poll::Ready(Some(item)),
             Err(e) => {
                 if e.is_empty() {
