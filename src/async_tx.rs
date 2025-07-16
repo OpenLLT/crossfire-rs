@@ -8,7 +8,10 @@ use std::marker::PhantomData;
 use std::mem::{needs_drop, MaybeUninit};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicI8, Ordering},
+    Arc,
+};
 use std::task::{Context, Poll};
 
 /// Single producer (sender) that works in async context.
@@ -56,6 +59,7 @@ pub struct AsyncTx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    backoff: AtomicI8,
 }
 
 impl<T> fmt::Debug for AsyncTx<T> {
@@ -88,7 +92,17 @@ impl<T> From<Tx<T>> for AsyncTx<T> {
 impl<T> AsyncTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, _phan: Default::default(), backoff: AtomicI8::new(-1) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn _detect_runtime(&self) -> u32 {
+        let mut backoff = self.backoff.load(Ordering::Relaxed);
+        if backoff < 0 {
+            backoff = self.shared.detect_async_backoff_tx();
+            self.backoff.store(backoff, Ordering::Release);
+        }
+        return backoff as u32;
     }
 
     #[inline]
@@ -163,12 +177,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 Box::pin(async_std::task::sleep(duration))
             }
         };
-        return SendTimeoutFuture {
-            tx: &self,
-            item: MaybeUninit::new(item),
-            waker: None,
-            sleep,
-        };
+        return SendTimeoutFuture { tx: &self, item: MaybeUninit::new(item), waker: None, sleep };
     }
 
     /// Internal function might change in the future. For public version, use AsyncSink::poll_send() instead.
@@ -180,8 +189,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns `Poll::Ready(Err(())` when all Rx dropped.
     #[inline(always)]
     pub(crate) fn poll_send<'a>(
-        &'a self, ctx: &'a mut Context, item: &MaybeUninit<T>, o_waker: &'a mut Option<LockedWaker>,
-        sink: bool,
+        &'a self, ctx: &'a mut Context, item: &MaybeUninit<T>,
+        o_waker: &'a mut Option<LockedWaker>, sink: bool,
     ) -> Poll<Result<(), ()>> {
         let shared = &self.shared;
         if shared.is_disconnected() {
@@ -190,8 +199,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let try_times = if shared.bound_size <= Some(2) { 5 } else { 1 };
-        let mut backoff = Backoff::new(try_times);
+        let mut backoff = Backoff::new(self._detect_runtime());
         loop {
             if shared.try_send(item).is_ok() {
                 shared.on_send();
