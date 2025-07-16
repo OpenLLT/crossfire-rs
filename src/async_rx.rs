@@ -1,3 +1,4 @@
+use crate::backoff::Backoff;
 use crate::stream::AsyncStream;
 use crate::{channel::*, MRx, Rx};
 use std::cell::Cell;
@@ -90,7 +91,7 @@ impl<T> AsyncRx<T> {
     /// returns Err([RecvError]) when all Tx dropped.
     #[inline(always)]
     pub fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
-        return ReceiveFuture { rx: &self, waker: None };
+        return ReceiveFuture { rx: self, waker: None };
     }
 
     /// Waits for a message to be received from the channel, but only for a limited time.
@@ -120,7 +121,7 @@ impl<T> AsyncRx<T> {
                 Box::pin(async_std::task::sleep(duration))
             }
         };
-        return ReceiveTimeoutFuture { rx: &self, waker: None, sleep };
+        return ReceiveTimeoutFuture { rx: self, waker: None, sleep };
     }
 
     /// Try to receive message, non-blocking.
@@ -143,18 +144,6 @@ impl<T> AsyncRx<T> {
         }
     }
 
-    #[inline(always)]
-    fn _return_empty(&self, o_waker: &mut Option<LockedWaker>) -> Result<T, TryRecvError> {
-        if self.shared.is_disconnected() {
-            if let Ok(item) = self.try_recv() {
-                let _ = o_waker.take();
-                return Ok(item);
-            }
-            return Err(TryRecvError::Disconnected);
-        }
-        return Err(TryRecvError::Empty);
-    }
-
     /// Internal function might change in the future. For public version, use AsyncStream::poll_item() instead
     ///
     /// Returns `Ok(T)` on successful.
@@ -166,34 +155,43 @@ impl<T> AsyncRx<T> {
     pub(crate) fn poll_item(
         &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>, stream: bool,
     ) -> Result<T, TryRecvError> {
+        let shared = &self.shared;
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        for i in 0..2 {
-            match self.shared.try_recv() {
-                None => {
-                    if i == 0 {
-                        if self.shared.reg_recv_async(ctx, o_waker) {
-                            // waker is not consumed
-                            return self._return_empty(o_waker);
-                        }
-                        // NOTE: The other side put something whie reg_send and did not see the waker,
-                        // should check the channel again, otherwise might incur a dead lock.
-                    } else {
-                        // No need to reg again
-                    }
+        let try_times = if shared.bound_size <= Some(2) { 5 } else { 1 };
+        let mut backoff = Backoff::new(try_times);
+        loop {
+            if let Some(item) = shared.try_recv() {
+                shared.on_recv();
+                if let Some(old_waker) = o_waker.take() {
+                    shared.cancel_recv_waker(old_waker);
+                }
+                return Ok(item);
+            }
+            if backoff.is_completed() {
+                if shared.reg_recv_async(ctx, o_waker) {
+                    // waker is not consumed
+                    break;
+                }
+                // NOTE: The other side put something whie reg_send and did not see the waker,
+                // should check the channel again, otherwise might incur a dead lock.
+                if !shared.is_empty() {
                     continue;
                 }
-                Some(item) => {
-                    if let Some(old_waker) = o_waker.take() {
-                        self.shared.cancel_recv_waker(old_waker);
-                    }
-                    self.shared.on_recv();
-                    return Ok(item);
-                }
+                break;
             }
+            backoff.snooze();
         }
-        return self._return_empty(o_waker);
+        if shared.is_disconnected() {
+            if let Some(item) = shared.try_recv() {
+                // No need to on_recv(), sender already gone
+                let _ = o_waker.take();
+                return Ok(item);
+            }
+            return Err(TryRecvError::Disconnected);
+        }
+        return Err(TryRecvError::Empty);
     }
 
     #[inline]
