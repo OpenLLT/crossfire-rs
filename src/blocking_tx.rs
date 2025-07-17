@@ -68,6 +68,18 @@ impl<T> Drop for Tx<T> {
     }
 }
 
+macro_rules! return_timeout {
+    ($shared: expr, $waker: expr, $item: expr) => {
+        if $waker.abandon() {
+            // We are waked, but give up sending, should notify another sender for safety
+            $shared.on_recv();
+        } else {
+            $shared.clear_send_wakers($waker.get_seq());
+        }
+        return Err(SendTimeoutError::Timeout(unsafe { $item.assume_init_read() }));
+    };
+}
+
 impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
     fn _try_send(shared: &ChannelShared<T>, item: T) -> Result<(), T> {
@@ -136,13 +148,7 @@ impl<T: Send + 'static> Tx<T> {
                             std::thread::park();
                         }
                     } else {
-                        if waker.abandon() {
-                            // We are waked, but give up sending, should notify another sender for safety
-                            shared.on_recv();
-                        } else {
-                            shared.clear_send_wakers(waker.get_seq());
-                        }
-                        return Err(SendTimeoutError::Timeout(unsafe { _item.assume_init_read() }));
+                        return_timeout!(shared, waker, _item);
                     }
                 }
             }
@@ -260,6 +266,7 @@ impl<T: Send + 'static> MTx<T> {
         if shared.is_disconnected() {
             return Err(SendTimeoutError::Disconnected(item));
         }
+
         if let Some(bound_size) = shared.bound_size {
             if bound_size == 0 {
                 todo!();
@@ -277,7 +284,9 @@ impl<T: Send + 'static> MTx<T> {
                 let waker = cache.new_blocking();
                 debug_assert!(waker.is_waked());
                 let mut need_spin;
+                let mut sec_time = false;
                 loop {
+                    backoff.reset();
                     loop {
                         if shared.try_send(&_item).is_ok() {
                             shared.on_send();
@@ -292,12 +301,23 @@ impl<T: Send + 'static> MTx<T> {
                             tx_stats!(_i, true);
                             return Ok(());
                         }
-                        if waker.is_waked() {
+                        if backoff.step() == 0 {
+                            if sec_time {
+                                if check_timeout(deadline).is_err() {
+                                    return_timeout!(shared, waker, _item);
+                                }
+                            }
                             need_spin = shared.reg_send_blocking(&waker);
                             if need_spin {
                                 backoff.set_limit(5);
                             } else {
+                                if shared.is_full() {
+                                    break;
+                                }
                                 backoff.set_limit(0);
+                                backoff.add_step();
+                                // just one more time
+                                continue;
                             }
                         }
                         if backoff.is_completed() {
@@ -312,24 +332,15 @@ impl<T: Send + 'static> MTx<T> {
                                 _item.assume_init_read()
                             }));
                         }
-                        if !shared.is_full() {
-                            continue;
-                        }
                         tx_stats!(backoff.step());
                         if let Some(dur) = time_left {
                             std::thread::park_timeout(dur);
                         } else {
                             std::thread::park();
                         }
-                        backoff.reset();
+                        sec_time = true;
                     } else {
-                        if waker.abandon() {
-                            // We are waked, but give up sending, should notify another sender for safety
-                            shared.on_recv();
-                        } else {
-                            shared.clear_send_wakers(waker.get_seq());
-                        }
-                        return Err(SendTimeoutError::Timeout(unsafe { _item.assume_init_read() }));
+                        return_timeout!(shared, waker, _item);
                     }
                 }
             }

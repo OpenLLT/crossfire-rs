@@ -40,6 +40,12 @@ impl Backoff {
         self.step as usize
     }
 
+    /// Add step without actrually snooze
+    #[inline(always)]
+    pub fn add_step(&mut self) {
+        self.step += 1;
+    }
+
     #[inline(always)]
     pub fn reset(&mut self) {
         self.step = 0;

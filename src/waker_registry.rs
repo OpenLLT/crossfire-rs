@@ -195,7 +195,7 @@ impl RegistryMulti {
         } else {
             guard.queue.push_back(weak);
         }
-        guard.queue.len() < 2
+        guard.queue.len() <= 2
     }
 }
 
