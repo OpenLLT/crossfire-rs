@@ -271,19 +271,19 @@ impl<T: Send + 'static> MTx<T> {
             if bound_size == 0 {
                 todo!();
             } else {
+                let mut backoff;
                 let _item = MaybeUninit::new(item);
-                let mut backoff = Backoff::new(6);
-                let mut i;
                 if shared.senders.is_empty() {
                     if shared.try_send(&_item).is_ok() {
                         shared.on_send();
                         tx_stats!(1, true);
                         return Ok(());
                     }
-                    i = 1;
+                    backoff = Backoff::new(6);
                     backoff.snooze();
                 } else {
-                    i = 0;
+                    backoff = Backoff::new(6);
+                    backoff.add_step();
                 }
                 let waker = cache.new_blocking();
                 debug_assert!(waker.is_waked());
@@ -302,11 +302,8 @@ impl<T: Send + 'static> MTx<T> {
                             tx_stats!(_i, true);
                             return Ok(());
                         }
-                        if backoff.step() == i {
-                            let need_spin = shared.reg_send_blocking(&waker);
-                            if need_spin {
-                                backoff.set_limit(6);
-                            } else {
+                        if backoff.step() == 1 {
+                            if shared.reg_send_blocking(&waker) {
                                 backoff.set_limit(1);
                                 backoff.set_yield_os();
                             }
@@ -316,7 +313,6 @@ impl<T: Send + 'static> MTx<T> {
                         }
                         backoff.snooze();
                     }
-                    i = 0;
                     if let Ok(time_left) = check_timeout(deadline) {
                         if shared.is_disconnected() {
                             waker.cancel();
@@ -336,6 +332,7 @@ impl<T: Send + 'static> MTx<T> {
                             std::thread::park();
                         }
                         backoff.reset();
+                        backoff.set_limit(6);
                     } else {
                         return_timeout!(shared, waker, _item);
                     }
