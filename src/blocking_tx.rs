@@ -305,20 +305,15 @@ impl<T: Send + 'static> MTx<T> {
                         }
                         if backoff.step() == i {
                             need_spin = shared.reg_send_blocking(&waker);
-                            if need_spin {
-                                backoff.set_limit(6);
-                            } else {
+                            if !need_spin {
                                 backoff.set_limit(1);
+                                backoff.set_yield_os();
                             }
                         }
                         if backoff.is_completed() {
                             break;
                         }
-                        if need_spin {
-                            backoff.snooze();
-                        } else {
-                            backoff.yield_os();
-                        }
+                        backoff.snooze();
                     }
                     i = 0;
                     if let Ok(time_left) = check_timeout(deadline) {
