@@ -257,7 +257,7 @@ fn bench_crossfire_bounded_100_blocking_mpsc(c: &mut Criterion) {
     let mut group = c.benchmark_group("crossfire_bounded_100_blocking_n_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
-    for tx_count in [1, 2, 4, 8, 16] {
+    for tx_count in [2, 4, 8, 16] {
         group.throughput(Throughput::Elements(ONE_MILLION as u64));
         group.bench_with_input(BenchmarkId::new("mpsc", tx_count), &tx_count, |b, i| {
             b.iter(move || {
