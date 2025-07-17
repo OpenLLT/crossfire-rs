@@ -31,6 +31,14 @@ impl Backoff {
     }
 
     #[inline(always)]
+    pub fn yield_os(&mut self) {
+        std::thread::yield_now();
+        if self.step < self.limit {
+            self.step += 1;
+        }
+    }
+
+    #[inline(always)]
     pub fn is_completed(&self) -> bool {
         self.step >= self.limit
     }
