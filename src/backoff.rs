@@ -12,6 +12,11 @@ impl Backoff {
     }
 
     #[inline(always)]
+    pub fn set_limit(&mut self, limit: u32) {
+        self.limit = limit;
+    }
+
+    #[inline(always)]
     pub fn snooze(&mut self) {
         if self.step <= SPIN_LIMIT {
             for _ in 0..1 << self.step {

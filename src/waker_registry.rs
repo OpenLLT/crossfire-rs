@@ -19,7 +19,7 @@ pub trait RegistryTrait {
     fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool;
 
     /// For thread context
-    fn reg_blocking(&self, _waker: &LockedWaker);
+    fn reg_blocking(&self, _waker: &LockedWaker) -> bool;
 
     fn clear_wakers(&self, _seq: u64);
 
@@ -55,7 +55,7 @@ impl RegistryTrait for RegistryDummy {
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, _waker: &LockedWaker) {
+    fn reg_blocking(&self, _waker: &LockedWaker) -> bool {
         unreachable!();
     }
 
@@ -118,8 +118,9 @@ impl RegistryTrait for RegistrySingle {
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, waker: &LockedWaker) {
+    fn reg_blocking(&self, waker: &LockedWaker) -> bool {
         self.cell.put(waker.weak());
+        true
     }
 
     #[inline(always)]
@@ -177,8 +178,9 @@ impl RegistryMulti {
         })
     }
 
+    /// Return with threshold
     #[inline(always)]
-    fn push(&self, waker: &LockedWaker) {
+    fn push(&self, waker: &LockedWaker) -> bool {
         let weak = waker.weak();
         let mut guard = self.inner.lock();
         let mut seq = guard.seq.wrapping_add(1);
@@ -193,6 +195,7 @@ impl RegistryMulti {
         } else {
             guard.queue.push_back(weak);
         }
+        guard.queue.len() < 2
     }
 }
 
@@ -223,8 +226,8 @@ impl RegistryTrait for RegistryMulti {
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, waker: &LockedWaker) {
-        self.push(waker);
+    fn reg_blocking(&self, waker: &LockedWaker) -> bool {
+        self.push(waker)
     }
 
     #[inline(always)]

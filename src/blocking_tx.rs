@@ -265,17 +265,18 @@ impl<T: Send + 'static> MTx<T> {
                 todo!();
             } else {
                 let _item = MaybeUninit::new(item);
+                let mut backoff = Backoff::new(6);
                 if shared.senders.is_empty() {
                     if shared.try_send(&_item).is_ok() {
                         shared.on_send();
                         tx_stats!(1, true);
                         return Ok(());
                     }
+                    backoff.snooze();
                 }
                 let waker = cache.new_blocking();
                 debug_assert!(waker.is_waked());
-                let mut backoff = Backoff::new(6);
-                backoff.snooze();
+                let mut need_spin;
                 loop {
                     loop {
                         if shared.try_send(&_item).is_ok() {
@@ -291,13 +292,20 @@ impl<T: Send + 'static> MTx<T> {
                             tx_stats!(_i, true);
                             return Ok(());
                         }
+                        if waker.is_waked() {
+                            need_spin = shared.reg_send_blocking(&waker);
+                            if need_spin {
+                                backoff.set_limit(5);
+                            } else {
+                                backoff.set_limit(0);
+                            }
+                        }
                         if backoff.is_completed() {
                             break;
                         }
                         backoff.snooze();
                     }
                     if let Ok(time_left) = check_timeout(deadline) {
-                        shared.reg_send_blocking(&waker);
                         if shared.is_disconnected() {
                             waker.cancel();
                             return Err(SendTimeoutError::Disconnected(unsafe {
@@ -308,12 +316,12 @@ impl<T: Send + 'static> MTx<T> {
                             continue;
                         }
                         tx_stats!(backoff.step());
-                        backoff.reset();
                         if let Some(dur) = time_left {
                             std::thread::park_timeout(dur);
                         } else {
                             std::thread::park();
                         }
+                        backoff.reset();
                     } else {
                         if waker.abandon() {
                             // We are waked, but give up sending, should notify another sender for safety

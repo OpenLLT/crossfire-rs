@@ -197,8 +197,8 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn reg_send_blocking(&self, waker: &LockedWaker) {
-        self.senders.reg_blocking(waker);
+    pub(crate) fn reg_send_blocking(&self, waker: &LockedWaker) -> bool {
+        self.senders.reg_blocking(waker)
     }
 
     #[inline(always)]
