@@ -273,20 +273,22 @@ impl<T: Send + 'static> MTx<T> {
             } else {
                 let _item = MaybeUninit::new(item);
                 let mut backoff = Backoff::new(6);
+                let mut i;
                 if shared.senders.is_empty() {
                     if shared.try_send(&_item).is_ok() {
                         shared.on_send();
                         tx_stats!(1, true);
                         return Ok(());
                     }
+                    i = 1;
                     backoff.snooze();
+                } else {
+                    i = 0;
                 }
                 let waker = cache.new_blocking();
                 debug_assert!(waker.is_waked());
                 let mut need_spin = false;
-                let mut sec_time = false;
                 loop {
-                    backoff.reset();
                     loop {
                         if shared.try_send(&_item).is_ok() {
                             shared.on_send();
@@ -301,15 +303,10 @@ impl<T: Send + 'static> MTx<T> {
                             tx_stats!(_i, true);
                             return Ok(());
                         }
-                        if backoff.step() == 0 {
-                            if sec_time {
-                                if check_timeout(deadline).is_err() {
-                                    return_timeout!(shared, waker, _item);
-                                }
-                            }
+                        if backoff.step() == i {
                             need_spin = shared.reg_send_blocking(&waker);
                             if need_spin {
-                                backoff.set_limit(5);
+                                backoff.set_limit(6);
                             } else {
                                 backoff.set_limit(1);
                             }
@@ -323,6 +320,7 @@ impl<T: Send + 'static> MTx<T> {
                             backoff.yield_os();
                         }
                     }
+                    i = 0;
                     if let Ok(time_left) = check_timeout(deadline) {
                         if shared.is_disconnected() {
                             waker.cancel();
@@ -333,10 +331,15 @@ impl<T: Send + 'static> MTx<T> {
                         tx_stats!(backoff.step());
                         if let Some(dur) = time_left {
                             std::thread::park_timeout(dur);
+                            if shared.is_full() {
+                                if check_timeout(deadline).is_err() {
+                                    return_timeout!(shared, waker, _item);
+                                }
+                            }
                         } else {
                             std::thread::park();
                         }
-                        sec_time = true;
+                        backoff.reset();
                     } else {
                         return_timeout!(shared, waker, _item);
                     }
