@@ -3,12 +3,13 @@ const SPIN_LIMIT: u32 = 6;
 pub struct Backoff {
     step: u32,
     limit: u32,
+    spin: bool,
 }
 
 impl Backoff {
     #[inline(always)]
     pub fn new(limit: u32) -> Self {
-        Self { step: 0, limit }
+        Self { step: 0, limit, spin: true }
     }
 
     #[inline(always)]
@@ -17,8 +18,13 @@ impl Backoff {
     }
 
     #[inline(always)]
+    pub fn set_yield_os(&mut self) {
+        self.spin = false;
+    }
+
+    #[inline(always)]
     pub fn snooze(&mut self) {
-        if self.step <= SPIN_LIMIT {
+        if self.spin && self.step <= SPIN_LIMIT {
             for _ in 0..1 << self.step {
                 std::hint::spin_loop();
             }
