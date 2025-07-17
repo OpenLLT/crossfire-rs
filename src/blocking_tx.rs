@@ -283,7 +283,7 @@ impl<T: Send + 'static> MTx<T> {
                 }
                 let waker = cache.new_blocking();
                 debug_assert!(waker.is_waked());
-                let mut need_spin;
+                let mut need_spin = false;
                 let mut sec_time = false;
                 loop {
                     backoff.reset();
@@ -311,19 +311,17 @@ impl<T: Send + 'static> MTx<T> {
                             if need_spin {
                                 backoff.set_limit(5);
                             } else {
-                                if shared.is_full() {
-                                    break;
-                                }
-                                backoff.set_limit(0);
-                                backoff.add_step();
-                                // just one more time
-                                continue;
+                                backoff.set_limit(1);
                             }
                         }
                         if backoff.is_completed() {
                             break;
                         }
-                        backoff.snooze();
+                        if need_spin {
+                            backoff.snooze();
+                        } else {
+                            backoff.yield_os();
+                        }
                     }
                     if let Ok(time_left) = check_timeout(deadline) {
                         if shared.is_disconnected() {
