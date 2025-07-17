@@ -287,7 +287,6 @@ impl<T: Send + 'static> MTx<T> {
                 }
                 let waker = cache.new_blocking();
                 debug_assert!(waker.is_waked());
-                let mut need_spin = false;
                 loop {
                     loop {
                         if shared.try_send(&_item).is_ok() {
@@ -304,8 +303,10 @@ impl<T: Send + 'static> MTx<T> {
                             return Ok(());
                         }
                         if backoff.step() == i {
-                            need_spin = shared.reg_send_blocking(&waker);
-                            if !need_spin {
+                            let need_spin = shared.reg_send_blocking(&waker);
+                            if need_spin {
+                                backoff.set_limit(6);
+                            } else {
                                 backoff.set_limit(1);
                                 backoff.set_yield_os();
                             }
