@@ -1,4 +1,4 @@
-use crate::locked_waker::LockedWaker;
+use crate::channel::*;
 use crate::{AsyncRx, MAsyncRx};
 use futures::stream;
 use std::fmt;
@@ -11,7 +11,7 @@ use std::task::*;
 /// Implemented futures::stream::Stream;
 pub struct AsyncStream<T> {
     rx: AsyncRx<T>,
-    waker: Option<LockedWaker>,
+    waker: Option<RecvWaker>,
     ended: bool,
 }
 
@@ -49,7 +49,7 @@ where
         if self.ended {
             return Poll::Ready(None);
         }
-        match AsyncRx::poll_item(&self.rx.shared, ctx, &mut self.waker, self.rx._detect_runtime()) {
+        match self.rx.poll_item(ctx, &mut self.waker) {
             Ok(item) => Poll::Ready(Some(item)),
             Err(e) => {
                 if e.is_empty() {
