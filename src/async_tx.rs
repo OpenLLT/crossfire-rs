@@ -115,12 +115,30 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns Err([SendError]) when all Rx is dropped.
     #[inline(always)]
     pub fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
-        return SendFuture {
-            shared: &self.shared,
-            item: MaybeUninit::new(item),
-            waker: None,
-            backoff: self._detect_runtime(),
-        };
+        let shared = &self.shared;
+        if shared.is_disconnected() {
+            return SendFuture::with_result(Err(SendError(item)));
+        }
+        let _item = MaybeUninit::new(item);
+        if shared.try_send(&_item).is_ok() {
+            shared.on_send();
+            return SendFuture::with_result(Ok(()));
+        }
+        let backoff_limit = self._detect_runtime();
+        if backoff_limit > 0 {
+            let mut backoff = Backoff::new(backoff_limit);
+            loop {
+                backoff.snooze();
+                if shared.try_send(&_item).is_ok() {
+                    shared.on_send();
+                    return SendFuture::with_result(Ok(()));
+                }
+                if backoff.is_completed() {
+                    break;
+                }
+            }
+        }
+        return SendFuture::with_pending(shared, _item);
     }
 
     /// Try to send message, non-blocking
@@ -163,6 +181,29 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     pub fn send_timeout<'a>(
         &'a self, item: T, duration: std::time::Duration,
     ) -> SendTimeoutFuture<'a, T> {
+        let shared = &self.shared;
+        if shared.is_disconnected() {
+            return SendTimeoutFuture::with_result(Err(SendTimeoutError::Disconnected(item)));
+        }
+        let _item = MaybeUninit::new(item);
+        if shared.try_send(&_item).is_ok() {
+            shared.on_send();
+            return SendTimeoutFuture::with_result(Ok(()));
+        }
+        let backoff_limit = self._detect_runtime();
+        if backoff_limit > 0 {
+            let mut backoff = Backoff::new(backoff_limit);
+            loop {
+                backoff.snooze();
+                if shared.try_send(&_item).is_ok() {
+                    shared.on_send();
+                    return SendTimeoutFuture::with_result(Ok(()));
+                }
+                if backoff.is_completed() {
+                    break;
+                }
+            }
+        }
         let sleep = {
             #[cfg(feature = "tokio")]
             {
@@ -173,13 +214,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 Box::pin(async_std::task::sleep(duration))
             }
         };
-        return SendTimeoutFuture {
-            shared: &self.shared,
-            item: MaybeUninit::new(item),
-            waker: None,
-            sleep,
-            backoff: self._detect_runtime(),
-        };
+        return SendTimeoutFuture::with_pending(shared, _item, sleep);
     }
 
     /// Internal function might change in the future. For public version, use AsyncSink::poll_send() instead
@@ -192,36 +227,34 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     #[inline(always)]
     pub(crate) fn poll_send<'a>(
         shared: &'a ChannelShared<T>, ctx: &'a mut Context, item: &MaybeUninit<T>,
-        o_waker: &'a mut Option<LockedWaker>, backoff_limit: u32,
+        o_waker: &'a mut Option<LockedWaker>,
     ) -> Poll<Result<(), ()>> {
         if shared.is_disconnected() {
             return Poll::Ready(Err(()));
         }
-        // When the result is not TrySendError::Full,
-        // make sure always take the o_waker out and abandon,
-        // to skip the timeout cleaning logic in Drop.
-        let mut backoff = Backoff::new(backoff_limit);
         loop {
-            if shared.try_send(item).is_ok() {
-                shared.on_send();
-                if let Some(old_waker) = o_waker.take() {
-                    shared.cancel_send_waker(old_waker);
+            if o_waker.is_some() {
+                if shared.try_send(item).is_ok() {
+                    shared.on_send();
+                    if let Some(old_waker) = o_waker.take() {
+                        // When the result is not TrySendError::Full,
+                        // make sure always take the o_waker out and abandon,
+                        // to skip the timeout cleaning logic in Drop.
+                        shared.cancel_send_waker(old_waker);
+                    }
+                    return Poll::Ready(Ok(()));
                 }
-                return Poll::Ready(Ok(()));
             }
-            if backoff.is_completed() {
-                if shared.reg_send_async(ctx, o_waker) {
-                    // waker is not consumed
-                    break;
-                }
-                // NOTE: The other side put something whie reg_send and did not see the waker,
-                // should check the channel again, otherwise might incur a dead lock.
-                if !shared.is_full() {
-                    continue;
-                }
+            if shared.reg_send_async(ctx, o_waker) {
+                // waker is not consumed
                 break;
             }
-            backoff.snooze();
+            // NOTE: The other side put something whie reg_send and did not see the waker,
+            // should check the channel again, otherwise might incur a dead lock.
+            if !shared.is_full() {
+                continue;
+            }
+            break;
         }
         if shared.is_disconnected() {
             return Poll::Ready(Err(()));
@@ -230,17 +263,33 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     }
 }
 
-/// A fixed-sized future object constructed by [AsyncTx::make_send_future()]
-pub struct SendFuture<'a, T: Unpin> {
-    shared: &'a ChannelShared<T>,
-    item: MaybeUninit<T>,
-    waker: Option<LockedWaker>,
-    backoff: u32,
+pub enum SendFuture<'a, T: Unpin> {
+    Done(Option<Result<(), SendError<T>>>),
+    Poll(_SendFuture<'a, T>),
 }
 
-unsafe impl<T: Unpin + Send> Send for SendFuture<'_, T> {}
+/// A fixed-sized future object constructed by [AsyncTx::make_send_future()]
+pub struct _SendFuture<'a, T: Unpin> {
+    item: MaybeUninit<T>,
+    waker: Option<LockedWaker>,
+    shared: &'a ChannelShared<T>,
+}
 
-impl<T: Unpin> Drop for SendFuture<'_, T> {
+impl<'a, T: Unpin> SendFuture<'a, T> {
+    #[inline(always)]
+    fn with_result(res: Result<(), SendError<T>>) -> Self {
+        return Self::Done(Some(res));
+    }
+
+    #[inline(always)]
+    fn with_pending(shared: &'a ChannelShared<T>, item: MaybeUninit<T>) -> Self {
+        return Self::Poll(_SendFuture { waker: None, item, shared });
+    }
+}
+
+unsafe impl<T: Unpin + Send> Send for _SendFuture<'_, T> {}
+
+impl<T: Unpin> Drop for _SendFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
@@ -250,10 +299,10 @@ impl<T: Unpin> Drop for SendFuture<'_, T> {
             } else {
                 self.shared.clear_send_wakers(waker.get_seq());
             }
-            if needs_drop::<T>() {
-                if size_of::<T>() > size_of::<*mut T>() {
-                    unsafe { self.item.assume_init_drop() };
-                }
+        }
+        if needs_drop::<T>() {
+            if size_of::<T>() > size_of::<*mut T>() {
+                unsafe { self.item.assume_init_drop() };
             }
         }
     }
@@ -264,40 +313,54 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match AsyncTx::poll_send(&_self.shared, ctx, &_self.item, &mut _self.waker, _self.backoff) {
-            Poll::Ready(Ok(())) => {
-                debug_assert!(_self.waker.is_none());
-                return Poll::Ready(Ok(()));
-            }
-            Poll::Ready(Err(())) => {
-                let _ = _self.waker.take();
-                return Poll::Ready(Err(SendError(unsafe { _self.item.assume_init_read() })));
-            }
-            Poll::Pending => return Poll::Pending,
+        match _self {
+            Self::Done(d) => Poll::Ready(d.take().unwrap()),
+            Self::Poll(s) => match AsyncTx::poll_send(&s.shared, ctx, &s.item, &mut s.waker) {
+                Poll::Ready(Ok(())) => {
+                    debug_assert!(s.waker.is_none());
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Ready(Err(())) => {
+                    let _ = s.waker.take();
+                    return Poll::Ready(Err(SendError(unsafe { s.item.assume_init_read() })));
+                }
+                Poll::Pending => return Poll::Pending,
+            },
         }
     }
 }
 
 /// A fixed-sized future object constructed by [AsyncTx::send_timeout()]
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
-pub struct SendTimeoutFuture<'a, T: Unpin> {
-    shared: &'a ChannelShared<T>,
-    item: MaybeUninit<T>,
-    waker: Option<LockedWaker>,
-    backoff: u32,
-    #[cfg(feature = "tokio")]
-    sleep: Pin<Box<tokio::time::Sleep>>,
-    #[cfg(not(feature = "tokio"))]
-    sleep: Pin<Box<dyn Future<Output = ()>>>,
+pub enum SendTimeoutFuture<'a, T: Unpin> {
+    Done(Option<Result<(), SendTimeoutError<T>>>),
+    Poll(_SendTimeoutFuture<'a, T>),
 }
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+pub struct _SendTimeoutFuture<'a, T: Unpin> {
+    shared: &'a ChannelShared<T>,
+    sleep: Pin<Box<dyn Future<Output = ()>>>,
+    item: MaybeUninit<T>,
+    waker: Option<LockedWaker>,
+}
+
+impl<'a, T: Unpin> SendTimeoutFuture<'a, T> {
+    #[inline(always)]
+    fn with_result(res: Result<(), SendTimeoutError<T>>) -> Self {
+        Self::Done(Some(res))
+    }
+
+    #[inline(always)]
+    fn with_pending(
+        shared: &'a ChannelShared<T>, item: MaybeUninit<T>,
+        sleep: Pin<Box<dyn Future<Output = ()>>>,
+    ) -> Self {
+        Self::Poll(_SendTimeoutFuture { waker: None, item, shared, sleep })
+    }
+}
+
 unsafe impl<T: Unpin + Send> Send for SendTimeoutFuture<'_, T> {}
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
+impl<T: Unpin> Drop for _SendTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
@@ -311,33 +374,35 @@ impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
     }
 }
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
     type Output = Result<(), SendTimeoutError<T>>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        let r =
-            AsyncTx::poll_send(&_self.shared, ctx, &_self.item, &mut _self.waker, _self.backoff);
-        match r {
-            Poll::Ready(Ok(())) => {
-                debug_assert!(_self.waker.is_none());
-                return Poll::Ready(Ok(()));
-            }
-            Poll::Ready(Err(())) => {
-                let _ = _self.waker.take();
-                return Poll::Ready(Err(SendTimeoutError::Disconnected(unsafe {
-                    _self.item.assume_init_read()
-                })));
-            }
-            Poll::Pending => {
-                if let Poll::Ready(()) = _self.sleep.as_mut().poll(ctx) {
-                    return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
-                        _self.item.assume_init_read()
-                    })));
+        match _self {
+            Self::Done(res) => return Poll::Ready(res.take().unwrap()),
+            Self::Poll(inner) => {
+                let r = AsyncTx::poll_send(&inner.shared, ctx, &inner.item, &mut inner.waker);
+                match r {
+                    Poll::Ready(Ok(())) => {
+                        debug_assert!(inner.waker.is_none());
+                        return Poll::Ready(Ok(()));
+                    }
+                    Poll::Ready(Err(())) => {
+                        let _ = inner.waker.take();
+                        return Poll::Ready(Err(SendTimeoutError::Disconnected(unsafe {
+                            inner.item.assume_init_read()
+                        })));
+                    }
+                    Poll::Pending => {
+                        if let Poll::Ready(()) = inner.sleep.as_mut().poll(ctx) {
+                            return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
+                                inner.item.assume_init_read()
+                            })));
+                        }
+                        return Poll::Pending;
+                    }
                 }
-                return Poll::Pending;
             }
         }
     }

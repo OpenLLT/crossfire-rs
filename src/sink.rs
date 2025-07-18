@@ -52,13 +52,12 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     #[inline]
     pub fn poll_send(&mut self, ctx: &mut Context, item: T) -> Result<(), TrySendError<T>> {
         let _item = MaybeUninit::new(item);
-        match AsyncTx::poll_send(
-            &self.tx.shared,
-            ctx,
-            &_item,
-            &mut self.waker,
-            self.tx._detect_runtime(),
-        ) {
+        let shared = &self.tx.shared;
+        if shared.try_send(&_item).is_ok() {
+            shared.on_send();
+            return Ok(());
+        }
+        match AsyncTx::poll_send(shared, ctx, &_item, &mut self.waker) {
             Poll::Ready(Ok(())) => Ok(()),
             Poll::Ready(Err(())) => Err(TrySendError::Disconnected(unsafe { _item.assume_init() })),
             Poll::Pending => Err(TrySendError::Full(unsafe { _item.assume_init() })),
