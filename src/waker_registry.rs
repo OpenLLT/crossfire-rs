@@ -158,7 +158,6 @@ struct RegistryMultiInner {
 
 pub struct RegistryMulti {
     checking: AtomicBool,
-    // 0 is invalid for seq
     is_empty: AtomicBool,
     inner: Mutex<RegistryMultiInner>,
 }
