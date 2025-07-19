@@ -66,6 +66,12 @@ pub struct WeakCell<T> {
 unsafe impl<T> Send for WeakCell<T> {}
 unsafe impl<T> Sync for WeakCell<T> {}
 
+impl<T> Drop for WeakCell<T> {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 impl<T> WeakCell<T> {
     #[inline(always)]
     pub fn new() -> Self {
