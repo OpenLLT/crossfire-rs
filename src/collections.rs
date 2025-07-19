@@ -55,7 +55,7 @@ impl<T> ArcCell<T> {
             ptr::null_mut(),
             item_ptr,
             Ordering::SeqCst,
-            Ordering::SeqCst,
+            Ordering::Relaxed,
         ) {
             Ok(_) => {}
             Err(_) => {
