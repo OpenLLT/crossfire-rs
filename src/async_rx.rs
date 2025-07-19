@@ -1,6 +1,6 @@
 use crate::backoff::Backoff;
-use crate::channel::*;
 use crate::stream::AsyncStream;
+use crate::{channel::*, MRx, Rx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -70,6 +70,13 @@ impl<T> fmt::Display for AsyncRx<T> {
 impl<T> Drop for AsyncRx<T> {
     fn drop(&mut self) {
         self.shared.close_rx();
+    }
+}
+
+impl<T> From<Rx<T>> for AsyncRx<T> {
+    fn from(value: Rx<T>) -> Self {
+        value.add_rx();
+        Self::new(value.shared.clone())
     }
 }
 
@@ -433,6 +440,13 @@ impl<T> Deref for MAsyncRx<T> {
     /// inherit all the functions of [AsyncRx]
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<T> From<MRx<T>> for MAsyncRx<T> {
+    fn from(value: MRx<T>) -> Self {
+        value.add_rx();
+        Self::new(value.shared.clone())
     }
 }
 

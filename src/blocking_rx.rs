@@ -1,5 +1,5 @@
 use crate::backoff::Backoff;
-use crate::{channel::*, rx_stats};
+use crate::{channel::*, rx_stats, AsyncRx, MAsyncRx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -64,6 +64,13 @@ impl<T> fmt::Display for Rx<T> {
 impl<T> Drop for Rx<T> {
     fn drop(&mut self) {
         self.shared.close_rx();
+    }
+}
+
+impl<T> From<AsyncRx<T>> for Rx<T> {
+    fn from(value: AsyncRx<T>) -> Self {
+        value.add_rx();
+        Self::new(value.shared.clone())
     }
 }
 
@@ -250,6 +257,13 @@ impl<T> Deref for MRx<T> {
 impl<T> From<MRx<T>> for Rx<T> {
     fn from(rx: MRx<T>) -> Self {
         rx.0
+    }
+}
+
+impl<T> From<MAsyncRx<T>> for MRx<T> {
+    fn from(value: MAsyncRx<T>) -> Self {
+        value.add_rx();
+        Self::new(value.shared.clone())
     }
 }
 

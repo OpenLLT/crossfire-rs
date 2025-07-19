@@ -1,6 +1,6 @@
 use crate::backoff::Backoff;
-use crate::channel::*;
 use crate::sink::AsyncSink;
+use crate::{channel::*, MTx, Tx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -71,6 +71,13 @@ unsafe impl<T: Send> Send for AsyncTx<T> {}
 impl<T> Drop for AsyncTx<T> {
     fn drop(&mut self) {
         self.shared.close_tx();
+    }
+}
+
+impl<T> From<Tx<T>> for AsyncTx<T> {
+    fn from(value: Tx<T>) -> Self {
+        value.add_tx();
+        Self::new(value.shared.clone())
     }
 }
 
@@ -440,6 +447,13 @@ impl<T> Deref for MAsyncTx<T> {
     /// inherit all the functions of [AsyncTx]
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<T> From<MTx<T>> for MAsyncTx<T> {
+    fn from(value: MTx<T>) -> Self {
+        value.add_tx();
+        Self::new(value.shared.clone())
     }
 }
 
