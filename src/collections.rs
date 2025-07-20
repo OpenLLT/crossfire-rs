@@ -98,7 +98,7 @@ impl<T> WeakCell<T> {
         loop {
             match self.ptr.compare_exchange(v, ptr::null_mut(), Ordering::SeqCst, Ordering::Acquire)
             {
-                Ok(_) => return unsafe { Weak::from_raw(v) }.upgrade(),
+                Ok(_) => return unsafe { Weak::from_raw(v).upgrade() },
                 Err(_v) => {
                     if _v == ptr::null_mut() {
                         return None;

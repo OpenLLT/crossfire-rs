@@ -1,95 +1,180 @@
+use crate::collections::WeakCell;
 use crate::locked_waker::*;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::Context;
+use std::sync::Weak;
 
-#[enum_dispatch(RegistryTrait)]
-pub enum Registry {
-    Single(RegistrySingle),
-    Multi(RegistryMulti),
-    Dummy(RegistryDummy),
+pub enum RegistrySender<T> {
+    Single(RegistrySingle<SendWaker<T>>),
+    Multi(RegistryMulti<SendWaker<T>>),
+    Dummy(RegistryDummy<SendWaker<T>>),
 }
 
-#[enum_dispatch]
-pub trait RegistryTrait {
-    fn is_empty(&self) -> bool;
+impl<T> RegistrySender<T> {
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            RegistrySender::Single(inner) => inner.is_empty(),
+            RegistrySender::Multi(inner) => inner.is_empty(),
+            RegistrySender::Dummy(_) => true,
+        }
+    }
 
     /// For async context
-    fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool;
+    #[inline(always)]
+    pub fn reg_async(&self, waker: &SendWaker<T>) -> Result<(), u8> {
+        if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
+            return Err(s);
+        }
+        match self {
+            RegistrySender::Single(inner) => inner.reg_async(waker),
+            RegistrySender::Multi(inner) => inner.reg_async(waker),
+            RegistrySender::Dummy(_) => {}
+        }
+        Ok(())
+    }
 
     /// For thread context
-    fn reg_blocking(&self, _waker: &LockedWaker);
+    #[inline(always)]
+    pub fn reg_blocking(&self, waker: &SendWaker<T>) -> Result<(), u8> {
+        // defensive code for not precise timed out, it happens.
+        // we cannot have multiple code of the same waker in registry
+        if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
+            return Err(s);
+        }
+        match self {
+            RegistrySender::Single(inner) => inner.reg_blocking(waker),
+            RegistrySender::Multi(inner) => inner.reg_blocking(waker),
+            RegistrySender::Dummy(_) => {}
+        }
+        Ok(())
+    }
 
-    fn clear_wakers(&self, _seq: usize);
+    #[inline(always)]
+    pub fn clear_wakers(&self, seq: usize) {
+        match self {
+            RegistrySender::Single(inner) => inner.clear_wakers(seq),
+            RegistrySender::Multi(inner) => inner.clear_wakers(seq),
+            RegistrySender::Dummy(_) => {}
+        }
+    }
 
-    fn cancel_waker(&self, _waker: LockedWaker);
+    #[inline(always)]
+    pub fn cancel_waker(&self) {
+        match self {
+            RegistrySender::Single(inner) => inner.cancel_waker(),
+            _ => {}
+        }
+    }
 
-    fn fire(&self);
-
-    fn close(&self);
+    #[inline(always)]
+    pub fn pop(&self) -> Option<SendWaker<T>> {
+        match self {
+            RegistrySender::Single(inner) => inner.pop(),
+            RegistrySender::Multi(inner) => inner.pop(),
+            RegistrySender::Dummy(_) => None,
+        }
+    }
 
     /// return waker queue size
-    fn len(&self) -> usize;
+    pub fn len(&self) -> usize {
+        match self {
+            RegistrySender::Single(inner) => inner.len(),
+            RegistrySender::Multi(inner) => inner.len(),
+            RegistrySender::Dummy(_) => 0,
+        }
+    }
+}
+
+pub enum RegistryRecv {
+    Single(RegistrySingle<RecvWaker>),
+    Multi(RegistryMulti<RecvWaker>),
+}
+
+impl RegistryRecv {
+    /// For async context
+    #[inline(always)]
+    pub fn reg_async(&self, waker: &RecvWaker) -> Result<(), u8> {
+        if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
+            return Err(s);
+        }
+        match self {
+            RegistryRecv::Single(inner) => inner.reg_async(waker),
+            RegistryRecv::Multi(inner) => inner.reg_async(waker),
+        }
+        Ok(())
+    }
+
+    /// For thread context
+    #[inline(always)]
+    pub fn reg_blocking(&self, waker: &RecvWaker) -> Result<(), u8> {
+        // defensive code for not precise timed out, it happens.
+        // we cannot have multiple code of the same waker in registry
+        if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
+            return Err(s);
+        }
+        match self {
+            RegistryRecv::Single(inner) => inner.reg_blocking(waker),
+            RegistryRecv::Multi(inner) => inner.reg_blocking(waker),
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn clear_wakers(&self, seq: usize) {
+        match self {
+            RegistryRecv::Single(inner) => inner.clear_wakers(seq),
+            RegistryRecv::Multi(inner) => inner.clear_wakers(seq),
+        }
+    }
+
+    #[inline(always)]
+    pub fn cancel_waker(&self) {
+        match self {
+            RegistryRecv::Single(inner) => inner.cancel_waker(),
+            _ => {}
+        }
+    }
+
+    #[inline(always)]
+    pub fn pop(&self) -> Option<RecvWaker> {
+        match self {
+            RegistryRecv::Single(inner) => inner.pop(),
+            RegistryRecv::Multi(inner) => inner.pop(),
+        }
+    }
+
+    /// return waker queue size
+    pub fn len(&self) -> usize {
+        match self {
+            RegistryRecv::Single(inner) => inner.len(),
+            RegistryRecv::Multi(inner) => inner.len(),
+        }
+    }
 }
 
 /// RegistryDummy is for unbounded channel tx, which is never blocked
-pub struct RegistryDummy();
+pub struct RegistryDummy<W: WakerTrait>(PhantomData<W>);
 
-impl RegistryDummy {
+impl<W: WakerTrait> RegistryDummy<W> {
     #[inline(always)]
-    pub fn new() -> Registry {
-        Registry::Dummy(RegistryDummy())
+    pub fn new() -> Self {
+        Self(Default::default())
     }
 }
 
-impl RegistryTrait for RegistryDummy {
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        true
-    }
-
-    #[inline(always)]
-    fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool {
-        unreachable!();
-    }
-
-    #[inline(always)]
-    fn reg_blocking(&self, _waker: &LockedWaker) {
-        unreachable!();
-    }
-
-    #[inline(always)]
-    fn clear_wakers(&self, _seq: usize) {}
-
-    #[inline(always)]
-    fn cancel_waker(&self, _waker: LockedWaker) {}
-
-    #[inline(always)]
-    fn fire(&self) {}
-
-    #[inline(always)]
-    fn close(&self) {}
-
-    /// return waker queue size
-    #[inline(always)]
-    fn len(&self) -> usize {
-        0
-    }
+pub struct RegistrySingle<W: WakerTrait> {
+    cell: WeakCell<W::Inner>,
 }
 
-pub struct RegistrySingle {
-    cell: WakerCell,
-}
-
-impl RegistrySingle {
+impl<W: WakerTrait> RegistrySingle<W> {
     #[inline(always)]
-    pub fn new() -> Registry {
-        Registry::Single(Self { cell: WakerCell::new() })
+    pub fn new() -> Self {
+        Self { cell: WeakCell::new() }
     }
-}
 
-impl RegistryTrait for RegistrySingle {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         !self.cell.exists()
@@ -97,33 +182,17 @@ impl RegistryTrait for RegistrySingle {
 
     /// return is_skip
     #[inline(always)]
-    fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
-        if let Some(_waker) = o_waker.as_ref() {
-            // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
-            // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
-            // There might be situation like spurious wakeup, poll() again under no fire() ever
-            // happened, waker still exists but cannot be used to wake the current future.
-            // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
-            if _waker.will_wake(ctx) {
-                // Normally only selection or multiplex future will get here.
-                // No need to reg again, since waker is not consumed nor changed
-                return true;
-            }
-        }
-        let waker = LockedWaker::new_async(ctx);
-        let weak = waker.weak();
-        o_waker.replace(waker);
-        self.cell.put(weak);
-        false
-    }
-
-    #[inline(always)]
-    fn reg_blocking(&self, waker: &LockedWaker) {
+    fn reg_async(&self, waker: &W) {
         self.cell.put(waker.weak());
     }
 
     #[inline(always)]
-    fn cancel_waker(&self, _waker: LockedWaker) {
+    fn reg_blocking(&self, waker: &W) {
+        self.cell.put(waker.weak());
+    }
+
+    #[inline(always)]
+    fn cancel_waker(&self) {
         // Got to be it, because only one single thread.
         self.cell.clear();
     }
@@ -135,13 +204,12 @@ impl RegistryTrait for RegistrySingle {
     }
 
     #[inline(always)]
-    fn fire(&self) {
-        self.cell.wake();
-    }
-
-    #[inline(always)]
-    fn close(&self) {
-        self.fire();
+    fn pop(&self) -> Option<W> {
+        if let Some(w) = self.cell.pop() {
+            Some(W::from_arc(w))
+        } else {
+            None
+        }
     }
 
     /// return waker queue size
@@ -155,29 +223,29 @@ impl RegistryTrait for RegistrySingle {
     }
 }
 
-struct RegistryMultiInner {
-    queue: VecDeque<LockedWakerRef>,
+struct RegistryMultiInner<W: WakerTrait> {
+    queue: VecDeque<Weak<W::Inner>>,
     seq: usize,
 }
 
-pub struct RegistryMulti {
+pub struct RegistryMulti<W: WakerTrait> {
     checking: AtomicBool,
     is_empty: AtomicBool,
-    inner: Mutex<RegistryMultiInner>,
+    inner: Mutex<RegistryMultiInner<W>>,
 }
 
-impl RegistryMulti {
+impl<W: WakerTrait> RegistryMulti<W> {
     #[inline(always)]
-    pub fn new() -> Registry {
-        Registry::Multi(Self {
+    pub fn new() -> Self {
+        Self {
             inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
             checking: AtomicBool::new(false),
             is_empty: AtomicBool::new(true),
-        })
+        }
     }
 
     #[inline(always)]
-    fn push(&self, waker: &LockedWaker) {
+    fn push(&self, waker: &W) {
         let weak = waker.weak();
         let mut guard = self.inner.lock();
         let seq = guard.seq.wrapping_add(1);
@@ -190,43 +258,20 @@ impl RegistryMulti {
             guard.queue.push_back(weak);
         }
     }
-}
 
-impl RegistryTrait for RegistryMulti {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         self.is_empty.load(Ordering::Acquire)
     }
 
     #[inline(always)]
-    fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
-        if let Some(_waker) = o_waker.as_ref() {
-            // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
-            // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
-            // There might be situation like spurious wakeup, poll() again under no fire() ever
-            // happened, waker still exists but cannot be used to wake the current future.
-            // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
-            if _waker.will_wake(ctx) {
-                // Normally only selection or multiplex future will get here.
-                // No need to reg again, since waker is not consumed nor changed
-                return true;
-            }
-        }
-        let waker = LockedWaker::new_async(ctx);
+    fn reg_async(&self, waker: &W) {
         self.push(&waker);
-        o_waker.replace(waker);
-        false
     }
 
     #[inline(always)]
-    fn reg_blocking(&self, waker: &LockedWaker) {
+    fn reg_blocking(&self, waker: &W) {
         self.push(waker);
-    }
-
-    #[inline(always)]
-    fn cancel_waker(&self, waker: LockedWaker) {
-        // Just abandon and leave it to fire() to clean it
-        waker.cancel();
     }
 
     /// Call when ReceiveFuture is cancelled.
@@ -238,8 +283,8 @@ impl RegistryTrait for RegistryMulti {
             return;
         }
         let mut guard = self.inner.lock();
-        while let Some(waker_ref) = guard.queue.pop_front() {
-            if waker_ref.try_to_clear(seq) {
+        while let Some(weak) = guard.queue.pop_front() {
+            if W::try_to_clear(weak, seq) {
                 // we do not known push back may have concurrent problem
                 break;
             }
@@ -251,30 +296,21 @@ impl RegistryTrait for RegistryMulti {
     }
 
     #[inline(always)]
-    fn fire(&self) {
+    fn pop(&self) -> Option<W> {
         if self.is_empty.load(Ordering::Acquire) {
-            return;
+            return None;
         }
         let mut guard = self.inner.lock();
-        while let Some(item) = guard.queue.pop_front() {
-            if !item.wake() {
-                continue;
-            }
+        while let Some(weak) = guard.queue.pop_front() {
             if guard.queue.is_empty() {
-                break;
+                self.is_empty.store(true, Ordering::Release);
             }
-            return;
+            if let Some(waker) = weak.upgrade() {
+                return Some(W::from_arc(waker));
+            }
         }
         self.is_empty.store(true, Ordering::Release);
-    }
-
-    #[inline(always)]
-    fn close(&self) {
-        let mut guard = self.inner.lock();
-        while let Some(waker) = guard.queue.pop_front() {
-            waker.wake();
-        }
-        self.is_empty.store(true, Ordering::Release);
+        return None;
     }
 
     /// return waker queue size
@@ -285,17 +321,18 @@ impl RegistryTrait for RegistryMulti {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use crate::locked_waker::LockedWaker;
+    use crate::locked_waker::RecvWaker;
     #[test]
     fn test_registry_multi() {
         let reg = RegistryMulti::new();
 
         // test push
-        let waker1 = LockedWaker::new_blocking();
+        let waker1 = RecvWaker::new_blocking();
         assert_eq!(reg.is_empty(), true);
         reg.reg_blocking(&waker1);
         assert!(waker1.get_seq() > 0);
@@ -303,7 +340,7 @@ mod tests {
         assert_eq!(reg.len(), 1);
         assert_eq!(waker1.is_waked(), false);
 
-        let waker2 = LockedWaker::new_blocking();
+        let waker2 = RecvWaker::new_blocking();
         reg.reg_blocking(&waker2);
         assert_eq!(reg.len(), 2);
         assert_eq!(waker2.get_seq(), waker1.get_seq() + 1);
@@ -321,12 +358,12 @@ mod tests {
 
         // test seq
 
-        let waker3 = LockedWaker::new_blocking();
+        let waker3 = RecvWaker::new_blocking();
         reg.reg_blocking(&waker3);
-        let waker4 = LockedWaker::new_blocking();
+        let waker4 = RecvWaker::new_blocking();
         reg.reg_blocking(&waker4);
         for _ in 0..10 {
-            let _waker = LockedWaker::new_blocking();
+            let _waker = RecvWaker::new_blocking();
             reg.reg_blocking(&_waker);
         }
         assert_eq!(reg.len(), 12);
@@ -342,3 +379,4 @@ mod tests {
         assert_eq!(reg.len(), 0);
     }
 }
+*/

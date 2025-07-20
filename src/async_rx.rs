@@ -178,24 +178,32 @@ impl<T> AsyncRx<T> {
     /// Return Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub(crate) fn poll_item(
-        shared: &ChannelShared<T>, ctx: &mut Context, o_waker: &mut Option<LockedWaker>,
+        shared: &ChannelShared<T>, ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
         backoff_time: u32,
     ) -> Result<T, TryRecvError> {
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         let mut backoff = Backoff::new(backoff_time);
-        loop {
+        'MAIN: loop {
             if let Some(item) = shared.try_recv() {
                 shared.on_recv();
-                if let Some(old_waker) = o_waker.take() {
-                    shared.cancel_recv_waker(old_waker);
+                if let Some(waker) = o_waker.take() {
+                    shared.recv_waker_done(&waker);
                 }
                 return Ok(item);
             }
             if backoff.is_completed() {
-                if shared.reg_recv_async(ctx, o_waker) {
-                    // waker is not consumed
+                let _waker;
+                if let Some(waker) = o_waker.as_ref() {
+                    waker.check_waker(ctx, false);
+                    _waker = waker;
+                } else {
+                    let waker = RecvWaker::new_async(ctx, ());
+                    o_waker.replace(waker);
+                    _waker = o_waker.as_ref().unwrap();
+                }
+                if shared.reg_recv_async(_waker).is_err() {
                     break;
                 }
                 // NOTE: The other side put something whie reg_send and did not see the waker,
@@ -229,8 +237,8 @@ impl<T> AsyncRx<T> {
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
 pub struct ReceiveFuture<'a, T> {
     shared: &'a ChannelShared<T>,
-    waker: Option<LockedWaker>,
     backoff: u32,
+    waker: Option<RecvWaker>,
 }
 
 unsafe impl<T: Send> Send for ReceiveFuture<'_, T> {}
@@ -238,13 +246,8 @@ unsafe impl<T: Send> Send for ReceiveFuture<'_, T> {}
 impl<T> Drop for ReceiveFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
-            // Cancelling the future, poll is not ready
-            if waker.abandon() {
-                // We are waked, but giving up to recv, should notify another receiver for safety
-                self.shared.on_send();
-            } else {
-                self.shared.clear_recv_wakers(waker.get_seq());
-            }
+            // cancelled
+            self.shared.abandon_recv_waker(waker);
         }
     }
 }
@@ -272,40 +275,24 @@ impl<T> Future for ReceiveFuture<'_, T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 pub struct ReceiveTimeoutFuture<'a, T> {
     shared: &'a ChannelShared<T>,
-    waker: Option<LockedWaker>,
     backoff: u32,
-    #[cfg(feature = "tokio")]
-    sleep: Pin<Box<tokio::time::Sleep>>,
-    #[cfg(not(feature = "tokio"))]
+    waker: Option<RecvWaker>,
     sleep: Pin<Box<dyn Future<Output = ()>>>,
 }
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 unsafe impl<T: Unpin + Send> Send for ReceiveTimeoutFuture<'_, T> {}
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
-            // Cancelling the future, poll is not ready
-            if waker.abandon() {
-                // We are waked, but giving up to recv, should notify another receiver for safety
-                self.shared.on_send();
-            } else {
-                self.shared.clear_recv_wakers(waker.get_seq());
-            }
+            // cancelled
+            self.shared.abandon_recv_waker(waker);
         }
     }
 }
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 impl<T> Future for ReceiveTimeoutFuture<'_, T> {
     type Output = Result<T, RecvTimeoutError>;
 
