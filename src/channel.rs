@@ -225,7 +225,9 @@ impl<T> ChannelShared<T> {
     ) -> Option<u8> {
         let mut backoff = Backoff::new(backoff_limit);
         loop {
-            if !need_wake {
+            let lock_res = if need_wake {
+                waker.try_lock()
+            } else {
                 // As sender, we do not contend the lock with on_recv, backoff and peak the state
                 if backoff_limit > 0 {
                     backoff.snooze();
@@ -237,8 +239,9 @@ impl<T> ChannelShared<T> {
                 if self.is_full() && !backoff.is_completed() {
                     continue;
                 }
-            }
-            if let Some(_guard) = waker.try_lock() {
+                waker.try_lock_weak()
+            };
+            if let Some(_guard) = lock_res {
                 let state = waker.get_state();
                 if need_wake {
                     if state >= WakerState::WAKED as u8 {

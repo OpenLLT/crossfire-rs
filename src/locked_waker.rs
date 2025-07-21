@@ -358,6 +358,18 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
+    pub fn try_lock_weak<'a>(&'a self) -> Option<WakerInnerGuard<'a, P>> {
+        if self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Some(WakerInnerGuard(self));
+        }
+        None
+    }
+
+    #[inline(always)]
     pub fn try_lock<'a>(&'a self) -> Option<WakerInnerGuard<'a, P>> {
         if self.locked.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
             return Some(WakerInnerGuard(self));
@@ -389,7 +401,7 @@ impl<P> WakerInner<P> {
             return;
         }
         loop {
-            if let Some(_guard) = self.try_lock() {
+            if let Some(_guard) = self.try_lock_weak() {
                 let o_waker = self.get_waker_mut();
                 if let WakerType::Async(_waker) = o_waker {
                     if !_waker.will_wake(ctx.waker()) {
@@ -414,7 +426,7 @@ impl<P> WakerInner<P> {
                     return;
                 } else {
                     loop {
-                        if let Some(_guard) = self.try_lock() {
+                        if let Some(_guard) = self.try_lock_weak() {
                             if let WakerType::Async(waker) = self.get_waker() {
                                 waker.wake_by_ref();
                             }
