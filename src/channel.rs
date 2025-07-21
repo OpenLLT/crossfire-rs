@@ -386,6 +386,7 @@ impl<T> ChannelShared<T> {
     }
 
     /// Call on cancellation, return true to indicate drop temporary message
+    /// return false to indicate already DONE.
     #[inline(always)]
     pub(crate) fn abandon_send_waker(&self, waker: SendWaker<T>) -> bool {
         let state = waker.abandon();
