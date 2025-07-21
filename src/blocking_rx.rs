@@ -86,41 +86,45 @@ impl<T> Rx<T> {
         if shared.bound_size == Some(0) {
             todo!();
         } else {
-            if let Some(item) = shared.try_recv() {
-                shared.on_recv();
-                return Ok(item);
+            macro_rules! try_recv {
+                () => {
+                    if let Some(item) = shared.try_recv() {
+                        shared.on_recv();
+                        return Ok(item);
+                    }
+                };
+                ($waker: expr) => {
+                    if let Some(item) = shared.try_recv() {
+                        shared.on_recv();
+                        shared.recv_waker_done(&$waker);
+                        self.waker_cache.push($waker);
+                        return Ok(item);
+                    }
+                };
+            }
+            try_recv!();
+            let mut backoff = Backoff::new(shared.get_backoff_rx());
+            loop {
+                backoff.snooze();
+                try_recv!();
+                if backoff.is_completed() {
+                    break;
+                }
             }
             let waker = self.waker_cache.new_blocking(());
             debug_assert!(waker.is_waked());
-            let mut backoff = Backoff::new(shared.get_backoff_rx());
-            backoff.snooze();
             loop {
-                loop {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        shared.recv_waker_done(&waker);
-                        self.waker_cache.push(waker);
-                        return Ok(item);
-                    }
-                    if backoff.is_completed() {
-                        break;
-                    }
-                    backoff.snooze();
-                }
                 if let Ok(time_left) = check_timeout(deadline) {
                     let _ = shared.reg_recv_blocking(&waker);
                     if shared.is_disconnected() {
                         if shared.is_empty() {
                             return Err(RecvTimeoutError::Disconnected);
-                        } else {
                             // make sure all msgs received, since we have soonze
-                            continue;
                         }
                     }
                     if !shared.is_empty() {
-                        continue;
+                        try_recv!(waker);
                     }
-                    backoff.reset();
                     if let Some(dur) = time_left {
                         std::thread::park_timeout(dur);
                     } else {
@@ -129,6 +133,14 @@ impl<T> Rx<T> {
                 } else {
                     let _ = shared.abandon_recv_waker(waker);
                     return Err(RecvTimeoutError::Timeout);
+                }
+                backoff.reset();
+                loop {
+                    try_recv!(waker);
+                    if backoff.is_completed() {
+                        break;
+                    }
+                    backoff.snooze();
                 }
             }
         }
