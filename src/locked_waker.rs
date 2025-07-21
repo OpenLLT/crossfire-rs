@@ -1,3 +1,4 @@
+use crate::backoff::*;
 use crate::collections::ArcCell;
 use std::cell::UnsafeCell;
 use std::mem::transmute;
@@ -298,16 +299,24 @@ impl<P> WakerInner<P> {
     /// WAKED: the future should drop message, and waked another counterpart.
     #[inline(always)]
     pub fn abandon(&self) -> u8 {
-        match self.state.compare_exchange(
-            WakerState::WAITING as u8,
-            WakerState::CLOSED as u8,
-            Ordering::SeqCst,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => return WakerState::CLOSED as u8,
-            Err(s) => {
-                return s;
+        // should have lock because it will content with close() and on_recv()
+        let mut backoff = Backoff::new(BackoffConfig::default());
+        loop {
+            if let Some(_guard) = self.try_lock_weak() {
+                // Acquire lock first, might be try_send_with_lock suc from on_recv().
+                match self.state.compare_exchange(
+                    WakerState::WAITING as u8,
+                    WakerState::CLOSED as u8,
+                    Ordering::SeqCst,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return WakerState::CLOSED as u8,
+                    Err(s) => {
+                        return s;
+                    }
+                }
             }
+            backoff.snooze();
         }
     }
 
@@ -318,6 +327,7 @@ impl<P> WakerInner<P> {
 
     #[inline(always)]
     pub fn close(&self) {
+        // should have lock because it will content with abandon()
         loop {
             match self.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
                 Ok(_) => {
