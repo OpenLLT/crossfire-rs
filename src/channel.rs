@@ -1,15 +1,18 @@
 pub use super::waker_registry::*;
-use crate::backoff::Backoff;
+use crate::backoff::*;
 use crate::crossbeam::array_queue::ArrayQueue;
 pub use crate::crossbeam::err::*;
 pub use crate::locked_waker::*;
 use crossbeam_queue::SegQueue;
 use lazy_static::lazy_static;
+use parking_lot::Mutex;
 use std::mem;
+use std::num::NonZeroUsize;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Context;
+use std::thread;
 use std::time::{Duration, Instant};
 
 pub(crate) enum Channel<T> {
@@ -69,6 +72,9 @@ pub struct ChannelShared<T> {
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
     pub(crate) bound_size: Option<usize>,
+    backoff_tx: AtomicU32,
+    backoff_rx: AtomicU32,
+    lock: Mutex<()>,
 }
 
 impl<T: Send + 'static> ChannelShared<T> {
@@ -101,6 +107,9 @@ impl<T> ChannelShared<T> {
             recvs,
             bound_size: inner.get_bound(),
             inner,
+            backoff_tx: AtomicU32::new(BackoffConfig::default().to_u32()),
+            backoff_rx: AtomicU32::new(BackoffConfig::default().to_u32()),
+            lock: Mutex::new(()),
         })
     }
 
@@ -159,11 +168,31 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn add_tx(&self) {
         let _ = self.tx_count.fetch_add(1, Ordering::SeqCst);
+        {
+            let _guard = self.lock.lock();
+            let _config = determine_backoff(&self.backoff_tx, &self.tx_count, &self.rx_count);
+            let _config = determine_backoff(&self.backoff_rx, &self.rx_count, &self.tx_count);
+        }
     }
 
     #[inline(always)]
     pub(crate) fn add_rx(&self) {
         let _ = self.rx_count.fetch_add(1, Ordering::SeqCst);
+        {
+            let _guard = self.lock.lock();
+            let _config = determine_backoff(&self.backoff_tx, &self.tx_count, &self.rx_count);
+            let _config = determine_backoff(&self.backoff_rx, &self.rx_count, &self.tx_count);
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_backoff_tx(&self) -> BackoffConfig {
+        load_backoff(&self.backoff_tx)
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_backoff_rx(&self) -> BackoffConfig {
+        load_backoff(&self.backoff_rx)
     }
 
     /// Call when tx drop
@@ -221,17 +250,19 @@ impl<T> ChannelShared<T> {
     #[inline]
     pub(crate) fn try_send_with_lock(
         &self, waker: &SendWaker<T>, mut ctx: Option<&mut Context>, need_wake: bool,
-        backoff_limit: u32,
+        backoff_limit: u16,
     ) -> Option<u8> {
-        let mut backoff = Backoff::new(backoff_limit);
+        let mut config = if need_wake { self.get_backoff_rx() } else { self.get_backoff_tx() };
+        if ctx.is_some() {
+            config.set_async_limit(backoff_limit);
+        }
+        let mut backoff = Backoff::new(config);
         loop {
             let lock_res = if need_wake {
                 waker.try_lock()
             } else {
                 // As sender, we do not contend the lock with on_recv, backoff and peak the state
-                if backoff_limit > 0 {
-                    backoff.snooze();
-                }
+                backoff.snooze();
                 let state = waker.get_state_relaxed();
                 if state >= WakerState::DONE as u8 {
                     return Some(state);
@@ -335,7 +366,7 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
         while let Some(waker) = self.senders.pop() {
-            if self.try_send_with_lock(&waker, None, true, 2).is_some() {
+            if self.try_send_with_lock(&waker, None, true, 0).is_some() {
                 return;
             }
         }
@@ -448,6 +479,55 @@ pub fn check_timeout(deadline: Option<Instant>) -> Result<Option<Duration>, ()> 
         }
     }
     Ok(None)
+}
+
+#[inline(always)]
+pub(crate) fn determine_backoff(
+    global: &AtomicU32, my_count: &AtomicUsize, other_count: &AtomicUsize,
+) -> BackoffConfig {
+    let avail =
+        usize::from(thread::available_parallelism().unwrap_or(NonZeroUsize::new(1).unwrap()));
+    loop {
+        let cur = global.load(Ordering::Acquire);
+        let cur_count = my_count.load(Ordering::Acquire);
+        let other = other_count.load(Ordering::Acquire);
+        let mut limit = 6;
+        let mut spin_limit = 6;
+        let total = cur_count + other;
+        if total > avail + 1 {
+            limit = 4;
+            spin_limit = 2;
+        } else if total >= avail {
+            limit = 5;
+            spin_limit = 4;
+        } else if cur_count == other {
+            // 1x1 2x2
+            spin_limit = 7;
+            limit = 7;
+        }
+        if cur_count > (other << 2) {
+            // 8x1
+            // They are out numbered, yield more cpu resource to them.
+            spin_limit = 0;
+        } else if cur_count << 2 < other && (cur_count << 1) < avail {
+            // 1x4, 1x8
+            // We are out numbered, always spinning
+            spin_limit = limit;
+        }
+        if avail <= 1 {
+            spin_limit = 0;
+        }
+        let config = BackoffConfig { spin_limit, limit };
+        let c = config.to_u32();
+        if global.compare_exchange(cur, c, Ordering::SeqCst, Ordering::Acquire).is_ok() {
+            return config;
+        }
+    }
+}
+
+#[inline(always)]
+fn load_backoff(global: &AtomicU32) -> BackoffConfig {
+    BackoffConfig::from_u32(global.load(Ordering::Relaxed))
 }
 
 #[allow(dead_code)]

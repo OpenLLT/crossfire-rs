@@ -92,7 +92,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
     pub(crate) fn _send_blocking(
         &self, item: T, fastpath: bool, deadline: Option<Instant>,
-    ) -> Result<bool, SendTimeoutError<T>> {
+    ) -> Result<(), SendTimeoutError<T>> {
         let shared = &self.shared;
         if shared.is_disconnected() {
             return Err(SendTimeoutError::Disconnected(item));
@@ -106,7 +106,7 @@ impl<T: Send + 'static> Tx<T> {
                     if shared.try_send(&_item).is_ok() {
                         shared.on_send();
                         tx_stats!(1, true);
-                        return Ok(false);
+                        return Ok(());
                     }
                 }
                 let waker = self.waker_cache.new_blocking(_item.as_mut_ptr());
@@ -116,7 +116,7 @@ impl<T: Send + 'static> Tx<T> {
                         if $state == WakerState::DONE as u8 {
                             shared.send_waker_done(&waker);
                             self.waker_cache.push(waker);
-                            return Ok(true);
+                            return Ok(());
                         } else if $state == WakerState::CLOSED as u8 {
                             return Err(SendTimeoutError::Disconnected(unsafe {
                                 _item.assume_init_read()
@@ -129,7 +129,7 @@ impl<T: Send + 'static> Tx<T> {
                 loop {
                     match shared.reg_send_blocking(&waker) {
                         Ok(()) => {
-                            state = shared.try_send_with_lock(&waker, None, false, 6).unwrap();
+                            state = shared.try_send_with_lock(&waker, None, false, 0).unwrap();
                             if state == WakerState::WAITING as u8 {
                                 if let Ok(time_left) = check_timeout(deadline) {
                                     if let Some(dur) = time_left {
@@ -157,10 +157,10 @@ impl<T: Send + 'static> Tx<T> {
                             shared.send_waker_done(&waker);
                             self.waker_cache.push(waker);
                             tx_stats!(_i, true);
-                            return Ok(true);
+                            return Ok(());
                         }
                     } else {
-                        let state = shared.try_send_with_lock(&waker, None, false, 6).unwrap();
+                        let state = shared.try_send_with_lock(&waker, None, false, 0).unwrap();
                         process_state!(state);
                     }
                 }
@@ -168,7 +168,7 @@ impl<T: Send + 'static> Tx<T> {
         } else {
             // unbounded
             match Self::_try_send(shared, item) {
-                Ok(_) => return Ok(false),
+                Ok(_) => return Ok(()),
                 Err(_) => unreachable!(),
             }
         }
@@ -183,9 +183,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
         match self._send_blocking(item, true, None) {
-            Ok(_) => {
-                return Ok(());
-            }
+            Ok(_) => return Ok(()),
             Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
             Err(SendTimeoutError::Timeout(_)) => unreachable!(),
         }
@@ -227,10 +225,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline]
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
         match Instant::now().checked_add(timeout) {
-            Some(deadline) => match self._send_blocking(item, true, Some(deadline)) {
-                Ok(_) => return Ok(()),
-                Err(e) => return Err(e),
-            },
+            Some(deadline) => self._send_blocking(item, true, Some(deadline)),
             None => self.try_send(item).map_err(|e| match e {
                 TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
                 TrySendError::Full(t) => SendTimeoutError::Timeout(t),
@@ -292,14 +287,7 @@ impl<T: Send + 'static> MTx<T> {
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
         match self._send_blocking(item, self.shared.senders.is_empty(), None) {
-            Ok(blocked) => {
-                if blocked {
-                    if false == self.shared.senders.is_empty() && self.shared.is_full() {
-                        std::thread::yield_now();
-                    }
-                }
-                return Ok(());
-            }
+            Ok(_) => return Ok(()),
             Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
             Err(SendTimeoutError::Timeout(_)) => unreachable!(),
         }
@@ -319,17 +307,7 @@ impl<T: Send + 'static> MTx<T> {
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => {
-                match self._send_blocking(item, self.shared.senders.is_empty(), Some(deadline)) {
-                    Ok(blocked) => {
-                        if blocked {
-                            if false == self.shared.senders.is_empty() && self.shared.is_full() {
-                                std::thread::yield_now();
-                            }
-                        }
-                        return Ok(());
-                    }
-                    Err(e) => return Err(e),
-                }
+                self._send_blocking(item, self.shared.senders.is_empty(), Some(deadline))
             }
             None => self.try_send(item).map_err(|e| match e {
                 TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),

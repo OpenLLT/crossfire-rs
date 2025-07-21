@@ -91,13 +91,13 @@ impl<T> AsyncRx<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn _detect_runtime(&self) -> u32 {
+    pub(crate) fn _detect_runtime(&self) -> u16 {
         let mut backoff = self.backoff.load(Ordering::Relaxed);
         if backoff < 0 {
             backoff = self.shared.detect_async_backoff_rx();
             self.backoff.store(backoff, Ordering::Release);
         }
-        return backoff as u32;
+        return backoff as u16;
     }
 
     /// Receive message, will await when channel is empty.
@@ -173,7 +173,9 @@ impl<T> AsyncRx<T> {
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         let shared = &self.shared;
-        let mut backoff = Backoff::new(self._detect_runtime());
+        let mut config = shared.get_backoff_rx();
+        config.set_async_limit(self._detect_runtime());
+        let mut backoff = Backoff::new(config);
         loop {
             if let Some(item) = shared.try_recv() {
                 shared.on_recv();

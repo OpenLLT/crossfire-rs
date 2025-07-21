@@ -93,7 +93,7 @@ impl<T> Rx<T> {
             }
             let waker = self.waker_cache.new_blocking(());
             debug_assert!(waker.is_waked());
-            let mut backoff = Backoff::new(6);
+            let mut backoff = Backoff::new(shared.get_backoff_rx());
             backoff.snooze();
             loop {
                 loop {
