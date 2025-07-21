@@ -1,4 +1,5 @@
 pub use super::waker_registry::*;
+use crate::backoff::*;
 use crate::crossbeam::array_queue::ArrayQueue;
 pub use crate::crossbeam::err::*;
 pub use crate::locked_waker::*;
@@ -88,6 +89,7 @@ impl<T: Send + 'static> ChannelShared<T> {
 
 impl<T> ChannelShared<T> {
     pub(crate) fn new(inner: Channel<T>, senders: Registry, recvs: Registry) -> Arc<Self> {
+        detect_default_backoff();
         Arc::new(Self {
             closed: AtomicBool::new(false),
             tx_count: AtomicU64::new(1),
