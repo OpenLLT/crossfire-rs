@@ -57,7 +57,7 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
             shared.on_send();
             return Ok(());
         }
-        match AsyncTx::poll_send(shared, ctx, &mut _item, &mut self.waker) {
+        match self.tx.poll_send(ctx, &mut _item, &mut self.waker) {
             Poll::Ready(Ok(())) => Ok(()),
             Poll::Ready(Err(())) => Err(TrySendError::Disconnected(unsafe { _item.assume_init() })),
             Poll::Pending => Err(TrySendError::Full(unsafe { _item.assume_init() })),

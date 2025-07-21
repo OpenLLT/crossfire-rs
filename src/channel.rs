@@ -221,12 +221,15 @@ impl<T> ChannelShared<T> {
     #[inline]
     pub(crate) fn try_send_with_lock(
         &self, waker: &SendWaker<T>, mut ctx: Option<&mut Context>, need_wake: bool,
+        backoff_limit: u32,
     ) -> Option<u8> {
-        let mut backoff = Backoff::new(5);
+        let mut backoff = Backoff::new(backoff_limit);
         loop {
             if !need_wake {
                 // As sender, we do not contend the lock with on_recv, backoff and peak the state
-                backoff.snooze();
+                if backoff_limit > 0 {
+                    backoff.snooze();
+                }
                 let state = waker.get_state_relaxed();
                 if state >= WakerState::DONE as u8 {
                     return Some(state);
@@ -329,7 +332,7 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
         while let Some(waker) = self.senders.pop() {
-            if self.try_send_with_lock(&waker, None, true).is_some() {
+            if self.try_send_with_lock(&waker, None, true, 2).is_some() {
                 return;
             }
         }
@@ -404,9 +407,9 @@ impl<T> ChannelShared<T> {
             }
         }
         if self.bound_size > Some(0) && self.bound_size <= Some(2) {
-            return 5;
+            return 6;
         } else {
-            return 0;
+            return 1;
         }
     }
 

@@ -129,7 +129,7 @@ impl<T: Send + 'static> Tx<T> {
                 loop {
                     match shared.reg_send_blocking(&waker) {
                         Ok(()) => {
-                            state = shared.try_send_with_lock(&waker, None, false).unwrap();
+                            state = shared.try_send_with_lock(&waker, None, false, 6).unwrap();
                             if state == WakerState::WAITING as u8 {
                                 if let Ok(time_left) = check_timeout(deadline) {
                                     if let Some(dur) = time_left {
@@ -160,7 +160,7 @@ impl<T: Send + 'static> Tx<T> {
                             return Ok(true);
                         }
                     } else {
-                        let state = shared.try_send_with_lock(&waker, None, false).unwrap();
+                        let state = shared.try_send_with_lock(&waker, None, false, 6).unwrap();
                         process_state!(state);
                     }
                 }
