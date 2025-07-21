@@ -138,10 +138,13 @@ impl<T: Send + 'static> Tx<T> {
                                     }
                                     state = waker.get_state();
                                 } else {
-                                    let _ = shared.abandon_send_waker(waker);
-                                    return Err(SendTimeoutError::Timeout(unsafe {
-                                        _item.assume_init_read()
-                                    }));
+                                    if shared.abandon_send_waker(waker) {
+                                        return Err(SendTimeoutError::Timeout(unsafe {
+                                            _item.assume_init_read()
+                                        }));
+                                    } else {
+                                        return Ok(());
+                                    }
                                 }
                             }
                         }
