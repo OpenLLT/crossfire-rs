@@ -237,9 +237,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             if shared.reg_send_async(_waker).is_err() {
                 continue;
             } else {
-                if shared.is_disconnected() {
-                    return Poll::Ready(Err(()));
-                }
                 state = shared
                     .try_send_with_lock(_waker, Some(ctx), false, self._detect_runtime())
                     .unwrap();

@@ -329,17 +329,19 @@ impl<P> WakerInner<P> {
     pub fn close(&self) {
         // should have lock because it will content with abandon()
         loop {
-            match self.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
-                Ok(_) => {
-                    self._wake(false);
-                    return;
-                }
-                Err(s) => {
-                    if s >= WakerState::WAKED as u8 {
+            if let Some(_guard) = self.try_lock_weak() {
+                match self.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
+                    Ok(_) => {
+                        self._wake(true);
                         return;
                     }
-                    std::hint::spin_loop();
+                    Err(_s) => {
+                        debug_assert!(_s >= WakerState::WAKED as u8, "unexpected state {}", _s);
+                        return;
+                    }
                 }
+            } else {
+                std::hint::spin_loop();
             }
         }
     }
