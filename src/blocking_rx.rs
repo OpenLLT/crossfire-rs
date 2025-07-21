@@ -1,5 +1,5 @@
 use crate::backoff::Backoff;
-use crate::{channel::*, rx_stats, AsyncRx, MAsyncRx};
+use crate::{channel::*, AsyncRx, MAsyncRx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -86,44 +86,45 @@ impl<T> Rx<T> {
         if shared.bound_size == Some(0) {
             todo!();
         } else {
-            if let Some(item) = shared.try_recv() {
-                shared.on_recv();
-                rx_stats!(1, true);
-                return Ok(item);
+            macro_rules! try_recv {
+                () => {
+                    if let Some(item) = shared.try_recv() {
+                        shared.on_recv();
+                        return Ok(item);
+                    }
+                };
+                ($waker: expr) => {
+                    if let Some(item) = shared.try_recv() {
+                        shared.on_recv();
+                        shared.recv_waker_done(&$waker);
+                        self.waker_cache.push($waker);
+                        return Ok(item);
+                    }
+                };
+            }
+            try_recv!();
+            let mut backoff = Backoff::new(shared.get_backoff_rx());
+            loop {
+                backoff.snooze();
+                try_recv!();
+                if backoff.is_completed() {
+                    break;
+                }
             }
             let waker = self.waker_cache.new_blocking(());
             debug_assert!(waker.is_waked());
-            let mut backoff = Backoff::new(shared.get_backoff_rx());
-            backoff.snooze();
             loop {
-                loop {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        shared.recv_waker_done(&waker);
-                        self.waker_cache.push(waker);
-                        rx_stats!(backoff.step(), true);
-                        return Ok(item);
-                    }
-                    if backoff.is_completed() {
-                        break;
-                    }
-                    backoff.snooze();
-                }
                 if let Ok(time_left) = check_timeout(deadline) {
                     let _ = shared.reg_recv_blocking(&waker);
                     if shared.is_disconnected() {
                         if shared.is_empty() {
                             return Err(RecvTimeoutError::Disconnected);
-                        } else {
                             // make sure all msgs received, since we have soonze
-                            continue;
                         }
                     }
                     if !shared.is_empty() {
-                        continue;
+                        try_recv!(waker);
                     }
-                    rx_stats!(backoff.step());
-                    backoff.reset();
                     if let Some(dur) = time_left {
                         std::thread::park_timeout(dur);
                     } else {
@@ -132,6 +133,14 @@ impl<T> Rx<T> {
                 } else {
                     let _ = shared.abandon_recv_waker(waker);
                     return Err(RecvTimeoutError::Timeout);
+                }
+                backoff.reset();
+                loop {
+                    try_recv!(waker);
+                    if backoff.is_completed() {
+                        break;
+                    }
+                    backoff.snooze();
                 }
             }
         }
