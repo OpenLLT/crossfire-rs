@@ -252,7 +252,19 @@ impl<T> ChannelShared<T> {
         &self, waker: &SendWaker<T>, mut ctx: Option<&mut Context>, need_wake: bool,
         backoff_limit: u16,
     ) -> Option<u8> {
-        let mut config = if need_wake { self.get_backoff_rx() } else { self.get_backoff_tx() };
+        let mut config = if need_wake {
+            self.get_backoff_rx()
+        } else {
+            if self.is_disconnected() {
+                // check disconnect in case dead lock on rx drop.
+                if let Err(s) = waker.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
+                    return Some(s);
+                } else {
+                    return Some(WakerState::CLOSED as u8);
+                }
+            }
+            self.get_backoff_tx()
+        };
         if ctx.is_some() {
             config.set_async_limit(backoff_limit);
         }
@@ -282,14 +294,10 @@ impl<T> ChannelShared<T> {
                         return Some(state);
                     }
                     // the receiver no need to check disconnect,
-                    // is impossible if there's live waker
+                    // its impossible if there's live waker
                 } else {
                     if state >= WakerState::DONE as u8 {
                         return Some(state);
-                    }
-                    if self.is_disconnected() {
-                        let _ = waker.try_change_state(WakerState::WAITING, WakerState::CLOSED);
-                        return Some(WakerState::CLOSED as u8);
                     }
                 }
                 // Check the state again, during locked, no one allowed to change the status
