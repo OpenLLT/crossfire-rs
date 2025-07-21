@@ -273,7 +273,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
 
     #[inline(always)]
     fn is_empty(&self) -> bool {
-        self.is_empty.load(Ordering::Acquire)
+        self.is_empty.load(Ordering::Relaxed)
     }
 
     #[inline(always)]

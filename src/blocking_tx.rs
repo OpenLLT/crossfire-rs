@@ -1,10 +1,10 @@
-use crate::{channel::*, tx_stats, AsyncTx, MAsyncTx};
+use crate::{channel::*, AsyncTx, MAsyncTx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant};
 
 /// Single producer (sender) that works in blocking context.
@@ -105,7 +105,6 @@ impl<T: Send + 'static> Tx<T> {
                 if fastpath {
                     if shared.try_send(&_item).is_ok() {
                         shared.on_send();
-                        tx_stats!(1, true);
                         return Ok(());
                     }
                 }
@@ -157,7 +156,6 @@ impl<T: Send + 'static> Tx<T> {
                         if shared.try_send(&_item).is_ok() {
                             shared.on_send();
                             self.waker_cache.push(waker);
-                            tx_stats!(_i, true);
                             return Ok(());
                         }
                     } else {
@@ -287,7 +285,9 @@ impl<T: Send + 'static> MTx<T> {
     ///
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        match self._send_blocking(item, self.shared.senders.is_empty(), None) {
+        let shared = &self.shared;
+        let fastpath = !shared.tx_control.load(Ordering::Relaxed) || shared.senders.is_empty();
+        match self._send_blocking(item, fastpath, None) {
             Ok(_) => return Ok(()),
             Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
             Err(SendTimeoutError::Timeout(_)) => unreachable!(),
@@ -308,7 +308,10 @@ impl<T: Send + 'static> MTx<T> {
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => {
-                self._send_blocking(item, self.shared.senders.is_empty(), Some(deadline))
+                let shared = &self.shared;
+                let fastpath =
+                    !shared.tx_control.load(Ordering::Relaxed) || shared.senders.is_empty();
+                self._send_blocking(item, fastpath, Some(deadline))
             }
             None => self.try_send(item).map_err(|e| match e {
                 TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),

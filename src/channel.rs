@@ -74,6 +74,7 @@ pub struct ChannelShared<T> {
     pub(crate) bound_size: Option<usize>,
     backoff_tx: AtomicU32,
     backoff_rx: AtomicU32,
+    pub(crate) tx_control: AtomicBool,
     lock: Mutex<()>,
 }
 
@@ -109,6 +110,7 @@ impl<T> ChannelShared<T> {
             inner,
             backoff_tx: AtomicU32::new(BackoffConfig::default().to_u32()),
             backoff_rx: AtomicU32::new(BackoffConfig::default().to_u32()),
+            tx_control: AtomicBool::new(false),
             lock: Mutex::new(()),
         })
     }
@@ -166,23 +168,28 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
+    fn auto_config(&self) {
+        let _guard = self.lock.lock();
+        let congest = if self.bound_size.is_none() {
+            false
+        } else {
+            self.tx_count.load(Ordering::Acquire) > self.rx_count.load(Ordering::Acquire)
+        };
+        self.tx_control.store(congest, Ordering::Release);
+        let _config = determine_backoff(&self.backoff_tx, &self.tx_count, &self.rx_count);
+        let _config = determine_backoff(&self.backoff_rx, &self.rx_count, &self.tx_count);
+    }
+
+    #[inline(always)]
     pub(crate) fn add_tx(&self) {
         let _ = self.tx_count.fetch_add(1, Ordering::SeqCst);
-        {
-            let _guard = self.lock.lock();
-            let _config = determine_backoff(&self.backoff_tx, &self.tx_count, &self.rx_count);
-            let _config = determine_backoff(&self.backoff_rx, &self.rx_count, &self.tx_count);
-        }
+        self.auto_config();
     }
 
     #[inline(always)]
     pub(crate) fn add_rx(&self) {
         let _ = self.rx_count.fetch_add(1, Ordering::SeqCst);
-        {
-            let _guard = self.lock.lock();
-            let _config = determine_backoff(&self.backoff_tx, &self.tx_count, &self.rx_count);
-            let _config = determine_backoff(&self.backoff_rx, &self.rx_count, &self.tx_count);
-        }
+        self.auto_config();
     }
 
     #[inline(always)]
