@@ -26,6 +26,9 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn reg_async(&self, waker: &SendWaker<T>) -> Result<(), u8> {
         if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
+            if s == WakerState::WAITING as u8 {
+                return Ok(());
+            }
             return Err(s);
         }
         match self {
@@ -42,6 +45,9 @@ impl<T> RegistrySender<T> {
         // defensive code for not precise timed out, it happens.
         // we cannot have multiple code of the same waker in registry
         if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
+            if s == WakerState::WAITING as u8 {
+                return Ok(());
+            }
             return Err(s);
         }
         match self {
@@ -98,6 +104,9 @@ impl RegistryRecv {
     #[inline(always)]
     pub fn reg_async(&self, waker: &RecvWaker) -> Result<(), u8> {
         if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
+            if s == WakerState::WAITING as u8 {
+                return Ok(());
+            }
             return Err(s);
         }
         match self {
@@ -113,6 +122,9 @@ impl RegistryRecv {
         // defensive code for not precise timed out, it happens.
         // we cannot have multiple code of the same waker in registry
         if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
+            if s == WakerState::WAITING as u8 {
+                return Ok(());
+            }
             return Err(s);
         }
         match self {
