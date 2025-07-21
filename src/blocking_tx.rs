@@ -114,7 +114,6 @@ impl<T: Send + 'static> Tx<T> {
                 macro_rules! process_state {
                     ($state: expr) => {
                         if $state == WakerState::DONE as u8 {
-                            shared.send_waker_done(&waker);
                             self.waker_cache.push(waker);
                             return Ok(());
                         } else if $state == WakerState::CLOSED as u8 {
@@ -154,7 +153,6 @@ impl<T: Send + 'static> Tx<T> {
                     if state == WakerState::WAKED as u8 {
                         if shared.try_send(&_item).is_ok() {
                             shared.on_send();
-                            shared.send_waker_done(&waker);
                             self.waker_cache.push(waker);
                             tx_stats!(_i, true);
                             return Ok(());
