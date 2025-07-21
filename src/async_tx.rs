@@ -271,11 +271,12 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 o_waker.replace(SendWaker::new_async(ctx, item.as_mut_ptr()));
                 _waker = o_waker.as_ref().unwrap();
             }
-            shared.reg_send_async(_waker);
-            if shared.is_disconnected() {
-                return Poll::Ready(Err(()));
-            }
-            if !shared.is_full() {
+            if shared.reg_send_async(_waker).is_err() {
+                continue;
+            } else {
+                if shared.is_disconnected() {
+                    return Poll::Ready(Err(()));
+                }
                 state = shared.try_send_with_lock(_waker, Some(ctx), false).unwrap();
                 if state > WakerState::WAKED as u8 {
                     continue;
@@ -334,7 +335,6 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
         match _self {
-            Self::Done(d) => Poll::Ready(d.take().unwrap()),
             Self::Poll(s) => match AsyncTx::poll_send(&s.shared, ctx, &mut s.item, &mut s.waker) {
                 Poll::Ready(Ok(())) => {
                     debug_assert!(s.waker.is_none());
@@ -346,6 +346,7 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
                 }
                 Poll::Pending => return Poll::Pending,
             },
+            Self::Done(d) => Poll::Ready(d.take().unwrap()),
         }
     }
 }
@@ -364,11 +365,13 @@ pub struct _SendTimeoutFuture<'a, T: Unpin> {
 }
 
 impl<'a, T: Unpin> SendTimeoutFuture<'a, T> {
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[inline(always)]
     fn with_result(res: Result<(), SendTimeoutError<T>>) -> Self {
         Self::Done(Some(res))
     }
 
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[inline(always)]
     fn with_pending(
         shared: &'a ChannelShared<T>, item: MaybeUninit<T>,
@@ -401,7 +404,6 @@ impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
         match _self {
-            Self::Done(res) => return Poll::Ready(res.take().unwrap()),
             Self::Poll(inner) => {
                 let r = AsyncTx::poll_send(&inner.shared, ctx, &mut inner.item, &mut inner.waker);
                 match r {
@@ -425,6 +427,7 @@ impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
                     }
                 }
             }
+            Self::Done(res) => return Poll::Ready(res.take().unwrap()),
         }
     }
 }

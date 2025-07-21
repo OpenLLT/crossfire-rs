@@ -93,7 +93,7 @@ impl<T> Rx<T> {
             }
             let waker = self.waker_cache.new_blocking(());
             debug_assert!(waker.is_waked());
-            let mut backoff = Backoff::new(4);
+            let mut backoff = Backoff::new(6);
             backoff.snooze();
             loop {
                 loop {
@@ -110,7 +110,7 @@ impl<T> Rx<T> {
                     backoff.snooze();
                 }
                 if let Ok(time_left) = check_timeout(deadline) {
-                    shared.reg_recv_blocking(&waker);
+                    let _ = shared.reg_recv_blocking(&waker);
                     if shared.is_disconnected() {
                         if shared.is_empty() {
                             return Err(RecvTimeoutError::Disconnected);

@@ -278,6 +278,11 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
+    pub fn get_state_relaxed(&self) -> u8 {
+        self.state.load(Ordering::Relaxed)
+    }
+
+    #[inline(always)]
     pub fn set_state(&self, state: WakerState) {
         #[cfg(test)]
         {
@@ -345,7 +350,7 @@ impl<P> WakerInner<P> {
                     self._wake(false);
                     return true;
                 }
-                Err(s) => {
+                Err(_) => {
                     return false;
                 }
             }
