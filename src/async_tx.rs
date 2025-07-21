@@ -95,13 +95,13 @@ impl<T> AsyncTx<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn _detect_runtime(&self) -> u32 {
+    pub(crate) fn _detect_runtime(&self) -> u16 {
         let mut backoff = self.backoff.load(Ordering::Relaxed);
         if backoff < 0 {
             backoff = self.shared.detect_async_backoff_tx();
             self.backoff.store(backoff, Ordering::Release);
         }
-        return backoff as u32;
+        return backoff as u16;
     }
 
     #[inline]
