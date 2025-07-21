@@ -206,9 +206,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     return Poll::Ready(Ok(()));
                 } else if state == WakerState::WAKED as u8 {
                     if shared.try_send(item).is_ok() {
-                        if let Some(waker) = o_waker.take() {
-                            shared.send_waker_done(&waker);
-                        }
+                        let _ = o_waker.take();
                         shared.on_send();
                         return Poll::Ready(Ok(()));
                     }

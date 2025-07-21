@@ -300,8 +300,13 @@ impl<T> ChannelShared<T> {
                         waker.set_state(WakerState::DONE);
                         if need_wake {
                             waker._wake(true);
+                            drop(_guard);
+                        } else {
+                            drop(_guard);
+                            if state == WakerState::WAITING as u8 {
+                                self.senders.cancel_waker();
+                            }
                         }
-                        drop(_guard);
                         self.on_send();
                         return Some(WakerState::DONE as u8);
                     } else {
@@ -377,14 +382,6 @@ impl<T> ChannelShared<T> {
         if waker.get_state() == WakerState::WAITING as u8 {
             waker.set_state(WakerState::DONE);
             self.recvs.cancel_waker();
-        }
-    }
-
-    #[inline(always)]
-    pub(crate) fn send_waker_done(&self, waker: &SendWaker<T>) {
-        if waker.get_state() == WakerState::WAITING as u8 {
-            waker.set_state(WakerState::DONE);
-            self.senders.cancel_waker();
         }
     }
 
