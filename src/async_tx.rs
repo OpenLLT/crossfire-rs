@@ -339,9 +339,18 @@ impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
             }
             Poll::Pending => {
                 if let Poll::Ready(()) = _self.sleep.as_mut().poll(ctx) {
-                    return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
-                        _self.item.assume_init_read()
-                    })));
+                    if let Some(waker) = _self.waker.take() {
+                        if _self.tx.shared.abandon_send_waker(waker) {
+                            return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
+                                _self.item.assume_init_read()
+                            })));
+                        } else {
+                            // Message already sent in background (on_recv).
+                            return Poll::Ready(Ok(()));
+                        }
+                    } else {
+                        unreachable!();
+                    }
                 }
                 return Poll::Pending;
             }
