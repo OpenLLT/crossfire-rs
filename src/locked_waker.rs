@@ -326,6 +326,11 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
+    pub fn is_locked(&self) -> bool {
+        self.locked.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
     pub fn close(&self) {
         // should have lock because it will content with abandon()
         loop {
