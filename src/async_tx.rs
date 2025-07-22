@@ -1,3 +1,4 @@
+use crate::backoff::BackoffConfig;
 use crate::sink::AsyncSink;
 use crate::{channel::*, MTx, Tx};
 use std::cell::Cell;
@@ -200,30 +201,34 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         loop {
             if let Some(waker) = o_waker.as_ref() {
                 state = waker.get_state();
-                if state == WakerState::DONE as u8 {
+                if state >= WakerState::DONE as u8 {
                     let _ = o_waker.take();
-                    // receiver done it's job
-                    return Poll::Ready(Ok(()));
+                    if state == WakerState::DONE as u8 {
+                        // receiver done it's job
+                        return Poll::Ready(Ok(()));
+                    } else {
+                        return Poll::Ready(Err(()));
+                    }
                 } else if state == WakerState::WAKED as u8 {
                     if shared.try_send(item).is_ok() {
                         let _ = o_waker.take();
                         shared.on_send();
                         return Poll::Ready(Ok(()));
                     }
-                    waker.check_waker(ctx, false);
+                    waker._check_waker(ctx);
                 } else {
+                    debug_assert_eq!(state, WakerState::WAITING as u8);
                     // Spurious waked by runtime, or
                     // Normally only selection or multiplex future will get here.
                     // No need to reg again, since waker is not consumed.
-                    state = shared
-                        .try_send_with_lock(waker, Some(ctx), false, self._detect_runtime())
-                        .unwrap();
+                    state = shared.sender_try_again(waker, Some(ctx), BackoffConfig::default());
                     if state == WakerState::WAITING as u8 {
                         return Poll::Pending;
                     }
                     if state > WakerState::WAKED as u8 {
                         continue;
                     }
+                    // register again
                 }
                 _waker = waker;
             } else {
@@ -237,9 +242,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             if shared.reg_send_async(_waker).is_err() {
                 continue;
             } else {
-                state = shared
-                    .try_send_with_lock(_waker, Some(ctx), false, self._detect_runtime())
-                    .unwrap();
+                let config = BackoffConfig { spin_limit: 10, limit: self._detect_runtime() };
+                state = shared.sender_try_again(_waker, None, config);
                 if state > WakerState::WAKED as u8 {
                     continue;
                 }

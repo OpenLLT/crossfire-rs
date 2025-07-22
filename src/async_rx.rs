@@ -192,7 +192,11 @@ impl<T> AsyncRx<T> {
             if backoff.is_completed() {
                 let _waker;
                 if let Some(waker) = o_waker.as_ref() {
-                    waker.check_waker(ctx, false);
+                    if waker.get_state() == WakerState::WAKED as u8 {
+                        waker._check_waker(ctx);
+                    } else {
+                        waker.check_waker(ctx);
+                    }
                     _waker = waker;
                 } else {
                     let waker = RecvWaker::new_async(ctx, ());

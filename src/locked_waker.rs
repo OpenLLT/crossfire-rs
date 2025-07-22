@@ -394,35 +394,39 @@ impl<P> WakerInner<P> {
         self.locked.store(false, Ordering::Release);
     }
 
+    /// no lock version
     #[inline(always)]
-    pub fn check_waker(&self, ctx: &mut Context, have_lock: bool) {
+    pub fn _check_waker(&self, ctx: &mut Context) {
         // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
         // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
         // There might be situation like spurious wakeup, poll() again under no fire() ever
         // happened, waker still exists but cannot be used to wake the current future.
         // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
-        if have_lock {
-            let o_waker = self.get_waker_mut();
-            if let WakerType::Async(_waker) = o_waker {
-                if !_waker.will_wake(ctx.waker()) {
-                    *o_waker = WakerType::Async(ctx.waker().clone());
-                }
-            } else {
-                unreachable!();
+        let o_waker = self.get_waker_mut();
+        if let WakerType::Async(_waker) = o_waker {
+            if !_waker.will_wake(ctx.waker()) {
+                *o_waker = WakerType::Async(ctx.waker().clone());
             }
-            return;
+        } else {
+            unreachable!();
         }
+    }
+
+    #[inline(always)]
+    pub fn check_waker(&self, ctx: &mut Context) -> u8 {
+        // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
+        // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
+        // There might be situation like spurious wakeup, poll() again under no fire() ever
+        // happened, waker still exists but cannot be used to wake the current future.
+        // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
         loop {
             if let Some(_guard) = self.try_lock_weak() {
-                let o_waker = self.get_waker_mut();
-                if let WakerType::Async(_waker) = o_waker {
-                    if !_waker.will_wake(ctx.waker()) {
-                        *o_waker = WakerType::Async(ctx.waker().clone());
-                    }
-                } else {
-                    unreachable!();
+                let state = self.state.load(Ordering::Acquire);
+                if state >= WakerState::DONE as u8 {
+                    return state;
                 }
-                return;
+                self._check_waker(ctx);
+                return state;
             } else {
                 std::hint::spin_loop();
             }
