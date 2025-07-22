@@ -1,4 +1,5 @@
 const SPIN_LIMIT: u16 = 6;
+const DEFAULT_LIMIT: u16 = 8;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -10,7 +11,7 @@ pub struct BackoffConfig {
 impl Default for BackoffConfig {
     #[inline(always)]
     fn default() -> Self {
-        Self { spin_limit: SPIN_LIMIT, limit: 7 }
+        Self { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT }
     }
 }
 

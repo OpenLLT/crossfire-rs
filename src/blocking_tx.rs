@@ -124,10 +124,11 @@ impl<T: Send + 'static> Tx<T> {
                 }
                 debug_assert!(waker.is_waked());
                 let mut state;
+                let backoff = shared.get_backoff_tx();
                 loop {
                     match shared.reg_send_blocking(&waker) {
                         Ok(()) => {
-                            state = shared.try_send_with_lock(&waker, None, false, 0).unwrap();
+                            state = shared.sender_try_again(&waker, None, backoff);
                             if state == WakerState::WAITING as u8 {
                                 if let Ok(time_left) = check_timeout(deadline) {
                                     if let Some(dur) = time_left {
@@ -159,7 +160,8 @@ impl<T: Send + 'static> Tx<T> {
                             return Ok(());
                         }
                     } else {
-                        let state = shared.try_send_with_lock(&waker, None, false, 0).unwrap();
+                        // Waited due to park_timeout
+                        let state = shared.sender_try_again(&waker, None, backoff);
                         process_state!(state);
                     }
                 }
