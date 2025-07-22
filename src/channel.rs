@@ -257,20 +257,10 @@ impl<T> ChannelShared<T> {
     pub(crate) fn on_recv_try_send(&self, waker: &SendWaker<T>) -> bool {
         let mut backoff = Backoff::new(BackoffConfig::default());
         loop {
-            let state = waker.get_state();
-            if state > WakerState::WAKED as u8 {
-                if !self.is_full() {
-                    return false;
-                }
-                return true;
-            }
             if let Some(_guard) = waker.try_lock() {
                 let state = waker.get_state();
                 if state >= WakerState::WAKED as u8 {
-                    if !self.is_full() {
-                        return false;
-                    }
-                    return true;
+                    return false;
                 }
                 // the receiver no need to check disconnect,
                 // its impossible if there's live waker
@@ -296,6 +286,10 @@ impl<T> ChannelShared<T> {
                     unreachable!();
                 }
             } else {
+                let state = waker.get_state();
+                if state >= WakerState::WAKED as u8 {
+                    return false;
+                }
                 backoff.snooze();
                 // The sender is checking itself, we cannot wakeup up otherwise state is wrong
             }
@@ -306,7 +300,8 @@ impl<T> ChannelShared<T> {
     /// when need_wake == false, will always return Some(state).
     #[inline]
     pub(crate) fn sender_try_again(
-        &self, waker: &SendWaker<T>, ctx: Option<&mut Context>, backoff_conf: BackoffConfig,
+        &self, waker: &SendWaker<T>, ctx: Option<&mut Context>, fastpath: bool,
+        backoff_conf: BackoffConfig,
     ) -> u8 {
         if self.is_disconnected() {
             // check disconnect in case dead lock on rx drop.
@@ -353,40 +348,37 @@ impl<T> ChannelShared<T> {
                 backoff.snooze();
             }
         } else {
+            if !fastpath {
+                backoff.snooze();
+            }
+            let state = waker.get_state();
+            if state >= WakerState::WAKED as u8 {
+                return state;
+            }
+            if !self.is_full() {
+                {
+                    if let Some(_guard) = waker.try_lock() {
+                        let state = waker.get_state();
+                        try_send!(_guard, state);
+                        // still full
+                    }
+                }
+            }
             loop {
                 // As sender, we do not contend the lock with on_recv, backoff and peak the state
                 backoff.snooze();
-                let mut state = waker.get_state_relaxed();
-                if state >= WakerState::DONE as u8 {
+                let state = waker.get_state();
+                if state >= WakerState::WAKED as u8 {
                     return state;
                 }
-                if backoff.step() == 1 {
-                    if self.is_full() {
-                        if backoff.is_completed() {
-                            return waker.get_state();
-                        }
+                // Already see by receiver, but we should ensure the waker is ok.
+                // If overloaded, we'd better park.
+                if backoff.is_completed() {
+                    // check lock state, if there's no receiver, should not spin forever.
+                    if waker.is_locked() {
                         continue;
                     }
-                } else {
-                    if backoff.is_completed() {
-                        return waker.get_state();
-                    }
-                    continue;
-                }
-                if let Some(_guard) = waker.try_lock_weak() {
-                    state = waker.get_state();
-                    try_send!(_guard, state);
-                    // still full
                     return state;
-                } else {
-                    let state = waker.get_state();
-                    if state > WakerState::WAKED as u8 {
-                        return state;
-                    }
-                    // Already see by receiver, but we should ensure the waker is ok
-                    if backoff.is_completed() {
-                        return state;
-                    }
                 }
             }
         }

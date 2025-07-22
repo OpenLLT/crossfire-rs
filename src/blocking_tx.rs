@@ -128,7 +128,7 @@ impl<T: Send + 'static> Tx<T> {
                 loop {
                     match shared.reg_send_blocking(&waker) {
                         Ok(()) => {
-                            state = shared.sender_try_again(&waker, None, backoff);
+                            state = shared.sender_try_again(&waker, None, fastpath, backoff);
                             if state == WakerState::WAITING as u8 {
                                 if let Ok(time_left) = check_timeout(deadline) {
                                     if let Some(dur) = time_left {
@@ -160,8 +160,8 @@ impl<T: Send + 'static> Tx<T> {
                             return Ok(());
                         }
                     } else {
-                        // Waited due to park_timeout
-                        let state = shared.sender_try_again(&waker, None, backoff);
+                        // Waited due to park_timeout or spurious waked
+                        let state = shared.sender_try_again(&waker, None, fastpath, backoff);
                         process_state!(state);
                     }
                 }

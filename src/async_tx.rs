@@ -221,7 +221,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     // Spurious waked by runtime, or
                     // Normally only selection or multiplex future will get here.
                     // No need to reg again, since waker is not consumed.
-                    state = shared.sender_try_again(waker, Some(ctx), BackoffConfig::default());
+                    state =
+                        shared.sender_try_again(waker, Some(ctx), true, BackoffConfig::default());
                     if state == WakerState::WAITING as u8 {
                         return Poll::Pending;
                     }
@@ -243,7 +244,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 continue;
             } else {
                 let config = BackoffConfig { spin_limit: 10, limit: self._detect_runtime() };
-                state = shared.sender_try_again(_waker, None, config);
+                state = shared.sender_try_again(_waker, None, true, config);
                 if state > WakerState::WAKED as u8 {
                     continue;
                 }
