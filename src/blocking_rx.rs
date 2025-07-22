@@ -117,12 +117,10 @@ impl<T> Rx<T> {
                 if let Ok(time_left) = check_timeout(deadline) {
                     let _ = shared.reg_recv_blocking(&waker);
                     if shared.is_disconnected() {
-                        if shared.is_empty() {
-                            return Err(RecvTimeoutError::Disconnected);
-                            // make sure all msgs received, since we have soonze
-                        }
-                    }
-                    if !shared.is_empty() {
+                        try_recv!(waker);
+                        // make sure all msgs received, since we have soonze
+                        return Err(RecvTimeoutError::Disconnected);
+                    } else if !shared.is_empty() {
                         try_recv!(waker);
                     }
                     if let Some(dur) = time_left {
