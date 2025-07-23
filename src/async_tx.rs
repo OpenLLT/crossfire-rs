@@ -222,7 +222,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                         shared.on_send();
                         return Poll::Ready(Ok(()));
                     }
-                    waker._check_waker(ctx);
+                    waker._check_waker_nolock(ctx);
                 } else {
                     debug_assert_eq!(state, WakerState::WAITING as u8);
                     // Spurious waked by runtime, or
