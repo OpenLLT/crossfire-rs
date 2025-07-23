@@ -350,10 +350,10 @@ impl<T> ChannelShared<T> {
         } else {
             if !fastpath {
                 backoff.snooze();
-            }
-            let state = waker.get_state();
-            if state >= WakerState::WAKED as u8 {
-                return state;
+                let state = waker.get_state();
+                if state >= WakerState::WAKED as u8 {
+                    return state;
+                }
             }
             if !self.is_full() {
                 {
@@ -364,23 +364,21 @@ impl<T> ChannelShared<T> {
                     }
                 }
             }
-            loop {
-                // As sender, we do not contend the lock with on_recv, backoff and peak the state
+            // As sender, we do not contend the lock with on_recv, backoff and peak the state
+            let mut state = waker.get_state_relaxed();
+            while state < WakerState::WAKED as u8 {
+                // NOTE: Normally async does not snooze
+                if backoff.is_completed() && waker.is_locked() == false {
+                    // Check lock state, if there's no receiver, should not spin forever.
+                    // If already see by receiver, but we should ensure the waker is ok.
+                    // When overloaded, we'd better park.
+                    //
+                    return state;
+                }
                 backoff.snooze();
-                let state = waker.get_state();
-                if state >= WakerState::WAKED as u8 {
-                    return state;
-                }
-                // Already see by receiver, but we should ensure the waker is ok.
-                // If overloaded, we'd better park.
-                if backoff.is_completed() {
-                    // check lock state, if there's no receiver, should not spin forever.
-                    if waker.is_locked() {
-                        continue;
-                    }
-                    return state;
-                }
+                state = waker.get_state();
             }
+            return state;
         }
     }
 
