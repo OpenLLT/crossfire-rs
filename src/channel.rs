@@ -255,12 +255,14 @@ impl<T> ChannelShared<T> {
     /// Return is_waked
     #[inline]
     pub(crate) fn on_recv_try_send(&self, waker: &SendWaker<T>) -> bool {
-        let mut backoff = Backoff::new(BackoffConfig::default());
+        let mut _backoff: Option<Backoff> = None;
         loop {
             if let Some(_guard) = waker.try_lock() {
                 let state = waker.get_state();
                 if state >= WakerState::WAKED as u8 {
-                    return false;
+                    // It's not possible to be WAKED
+                    // On CLOSED, its abandoning send. if it's DONE consider we waked
+                    return state != WakerState::CLOSED as u8;
                 }
                 // the receiver no need to check disconnect,
                 // its impossible if there's live waker
@@ -274,24 +276,37 @@ impl<T> ChannelShared<T> {
                         drop(_guard);
                         self.on_send();
                         return true;
-                    } else {
-                        // still full
-                        // Let the sender to re-register
-                        waker.set_state(WakerState::WAKED);
-                        waker._wake_nolock();
-                        // TODO optimise
-                        return true; // Do not try another
                     }
                 } else {
                     unreachable!();
                 }
+                // still full
+                // Let the sender to re-register
+                waker.set_state(WakerState::WAKED);
+                waker._wake_nolock();
+                // TODO optimise
+                return true; // Do not try another
             } else {
-                let state = waker.get_state();
-                if state >= WakerState::WAKED as u8 {
-                    return false;
+                if let Some(backoff) = _backoff.as_mut() {
+                    if backoff.is_completed() {
+                        return waker.wake_simple();
+                    } else {
+                        backoff.snooze();
+                    }
+                } else {
+                    let mut backoff = Backoff::new(self.get_backoff_rx());
+                    backoff.snooze();
+                    let state = waker.get_state_relaxed();
+                    if state >= WakerState::WAKED as u8 {
+                        // It's not possible to be WAKED
+                        // On CLOSED, its abandoning send. if it's DONE consider we waked
+                        return state != WakerState::CLOSED as u8;
+                    }
+                    if !self.tx_control.load(Ordering::Relaxed) {
+                        return waker.wake_simple();
+                    }
+                    _backoff.replace(backoff);
                 }
-                backoff.snooze();
-                // The sender is checking itself, we cannot wakeup up otherwise state is wrong
             }
         }
     }
