@@ -87,6 +87,8 @@ mod tests {
     #[test]
     fn test_backoff() {
         let backoff = Backoff::new(BackoffConfig { spin_limit: 1, limit: 0 });
-        assert!(backoff.is_completed())
+        assert!(backoff.is_completed());
+        println!("backoff size {}", size_of::<Backoff>());
+        println!("BackoffConfig size {}", size_of::<BackoffConfig>());
     }
 }

@@ -533,10 +533,10 @@ pub(crate) fn determine_backoff(
         let mut spin_limit = 6;
         let total = cur_count + other;
         if total > avail + 1 {
-            limit = 4;
+            limit = 5;
             spin_limit = 2;
         } else if total >= avail {
-            limit = 5;
+            limit = 6;
             spin_limit = 4;
         } else if cur_count == other {
             // 1x1 2x2
