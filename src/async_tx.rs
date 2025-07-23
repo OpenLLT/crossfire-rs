@@ -189,17 +189,24 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         }
         let mut _waker;
         let mut state;
+
+        macro_rules! process_state {
+            ($state: expr) => {{
+                let _ = o_waker.take();
+                if $state == WakerState::DONE as u8 {
+                    // receiver done it's job
+                    Poll::Ready(Ok(()))
+                } else {
+                    debug_assert_eq!($state, WakerState::CLOSED as u8);
+                    Poll::Ready(Err(()))
+                }
+            }};
+        }
         loop {
             if let Some(waker) = o_waker.as_ref() {
                 state = waker.get_state();
                 if state >= WakerState::DONE as u8 {
-                    let _ = o_waker.take();
-                    if state == WakerState::DONE as u8 {
-                        // receiver done it's job
-                        return Poll::Ready(Ok(()));
-                    } else {
-                        return Poll::Ready(Err(()));
-                    }
+                    return process_state!(state);
                 } else if state == WakerState::WAKED as u8 {
                     if shared.try_send(item).is_ok() {
                         let _ = o_waker.take();
@@ -218,7 +225,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                         return Poll::Pending;
                     }
                     if state > WakerState::WAKED as u8 {
-                        continue;
+                        return process_state!(state);
                     }
                     // register again
                 }
@@ -231,13 +238,16 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 o_waker.replace(SendWaker::new_async(ctx, item.as_mut_ptr()));
                 _waker = o_waker.as_ref().unwrap();
             }
-            if shared.reg_send_async(_waker).is_err() {
+            if let Err(state) = shared.reg_send_async(_waker) {
+                if state > WakerState::WAKED as u8 {
+                    return process_state!(state);
+                }
                 continue;
             } else {
-                let config = BackoffConfig { spin_limit: 10, limit: self._detect_runtime() };
+                let config = BackoffConfig { spin_limit: 7, limit: self._detect_runtime() };
                 state = shared.sender_try_again(_waker, None, true, config);
                 if state > WakerState::WAKED as u8 {
-                    continue;
+                    return process_state!(state);
                 }
             }
             return Poll::Pending;
