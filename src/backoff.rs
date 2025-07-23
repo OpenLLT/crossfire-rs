@@ -1,5 +1,6 @@
 const SPIN_LIMIT: u16 = 6;
-const DEFAULT_LIMIT: u16 = 8;
+const DEFAULT_LIMIT: u16 = 6;
+const MAX_LIMIT: u16 = 10;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -57,7 +58,7 @@ impl Backoff {
         } else {
             std::thread::yield_now();
         }
-        if self.step < self.config.limit as u32 {
+        if self.step < MAX_LIMIT as u32 {
             self.step += 1;
         }
     }
