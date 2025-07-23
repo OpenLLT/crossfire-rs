@@ -229,7 +229,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     // Normally only selection or multiplex future will get here.
                     // No need to reg again, since waker is not consumed.
                     state =
-                        shared.sender_try_again(waker, Some(ctx), true, BackoffConfig::default());
+                        shared.sender_try_again_async(item, waker, ctx, BackoffConfig::default());
                     if state == WakerState::WAITING as u8 {
                         return Poll::Pending;
                     }
@@ -248,18 +248,22 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 _waker = o_waker.as_ref().unwrap();
             }
             if let Err(state) = shared.reg_send_async(_waker) {
-                if state > WakerState::WAKED as u8 {
-                    return process_state!(state);
-                }
-                continue;
-            } else {
-                let config = BackoffConfig { spin_limit: 7, limit: self._detect_runtime() };
-                state = shared.sender_try_again(_waker, None, true, config);
-                if state > WakerState::WAKED as u8 {
+                if state >= WakerState::WAKED as u8 {
+                    if state == WakerState::WAKED as u8 {
+                        continue;
+                    }
                     return process_state!(state);
                 }
             }
-            return Poll::Pending;
+            let config = BackoffConfig { spin_limit: 7, limit: self._detect_runtime() };
+            state = shared.sender_try_again_blocking(item, _waker, true, config);
+            if state == WakerState::WAITING as u8 {
+                return Poll::Pending;
+            } else if state > WakerState::WAKED as u8 {
+                return process_state!(state);
+            }
+            debug_assert_eq!(state, WakerState::WAKED as u8);
+            continue;
         }
     }
 }

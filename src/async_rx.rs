@@ -203,13 +203,19 @@ impl<T> AsyncRx<T> {
                     o_waker.replace(waker);
                     _waker = o_waker.as_ref().unwrap();
                 }
-                if shared.reg_recv_async(_waker).is_err() {
-                    break;
-                }
-                // NOTE: The other side put something whie reg_send and did not see the waker,
-                // should check the channel again, otherwise might incur a dead lock.
-                if !shared.is_empty() {
-                    continue;
+                if shared.reg_recv_async(_waker).is_ok() {
+                    // NOTE: The other side put something whie reg_send and did not see the waker,
+                    // should check the channel again, otherwise might incur a dead lock.
+                    if !shared.is_empty() {
+                        if let Some(item) = shared.try_recv() {
+                            shared.on_recv();
+                            if let Some(waker) = o_waker.take() {
+                                shared.recv_waker_done(&waker);
+                            }
+                            return Ok(item);
+                        }
+                    }
+                    _waker.commit_waiting();
                 }
                 break;
             }

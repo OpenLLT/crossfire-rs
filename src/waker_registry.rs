@@ -26,11 +26,12 @@ impl<T> RegistrySender<T> {
     /// For async context
     #[inline(always)]
     pub fn reg_async(&self, waker: &SendWaker<T>) -> Result<(), u8> {
-        if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
-            if s == WakerState::WAITING as u8 {
-                return Ok(());
-            }
-            return Err(s);
+        let state = waker.get_state();
+        if state == WakerState::WAKED as u8 {
+            waker.set_state(WakerState::INIT);
+        } else {
+            // Might be WAITING
+            return Err(state);
         }
         match self {
             RegistrySender::Single(inner) => inner.reg_async(waker),
@@ -43,13 +44,12 @@ impl<T> RegistrySender<T> {
     /// For thread context
     #[inline(always)]
     pub fn reg_blocking(&self, waker: &SendWaker<T>) -> Result<(), u8> {
-        // defensive code for not precise timed out, it happens.
-        // we cannot have multiple code of the same waker in registry
-        if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
-            if s == WakerState::WAITING as u8 {
-                return Ok(());
-            }
-            return Err(s);
+        let state = waker.get_state();
+        if state == WakerState::WAKED as u8 {
+            waker.set_state(WakerState::INIT);
+        } else {
+            // Might be WAITING
+            return Err(state);
         }
         match self {
             RegistrySender::Single(inner) => inner.reg_blocking(waker),
@@ -104,11 +104,12 @@ impl RegistryRecv {
     /// For async context
     #[inline(always)]
     pub fn reg_async(&self, waker: &RecvWaker) -> Result<(), u8> {
-        if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
-            if s == WakerState::WAITING as u8 {
-                return Ok(());
-            }
-            return Err(s);
+        let state = waker.get_state();
+        if state == WakerState::WAKED as u8 {
+            waker.set_state(WakerState::INIT);
+        } else {
+            // Might be WAITING
+            return Err(state);
         }
         match self {
             RegistryRecv::Single(inner) => inner.reg_async(waker),
@@ -120,13 +121,12 @@ impl RegistryRecv {
     /// For thread context
     #[inline(always)]
     pub fn reg_blocking(&self, waker: &RecvWaker) -> Result<(), u8> {
-        // defensive code for not precise timed out, it happens.
-        // we cannot have multiple code of the same waker in registry
-        if let Err(s) = waker.try_change_state(WakerState::WAKED, WakerState::WAITING) {
-            if s == WakerState::WAITING as u8 {
-                return Ok(());
-            }
-            return Err(s);
+        let state = waker.get_state();
+        if state == WakerState::WAKED as u8 {
+            waker.set_state(WakerState::INIT);
+        } else {
+            // Might be WAITING
+            return Err(state);
         }
         match self {
             RegistryRecv::Single(inner) => inner.reg_blocking(waker),

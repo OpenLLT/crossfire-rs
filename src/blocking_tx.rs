@@ -109,60 +109,64 @@ impl<T: Send + 'static> Tx<T> {
                     }
                 }
                 let waker = self.waker_cache.new_blocking(_item.as_mut_ptr());
-
-                macro_rules! process_state {
-                    ($state: expr) => {
-                        if $state == WakerState::DONE as u8 {
-                            self.waker_cache.push(waker);
-                            return Ok(());
-                        } else if $state == WakerState::CLOSED as u8 {
-                            return Err(SendTimeoutError::Disconnected(unsafe {
-                                _item.assume_init_read()
-                            }));
-                        }
-                    };
-                }
                 debug_assert!(waker.is_waked());
                 let mut state;
-                let backoff = shared.get_backoff_tx();
+                let backoff_conf = shared.get_backoff_tx();
                 loop {
                     match shared.reg_send_blocking(&waker) {
                         Ok(()) => {
-                            state = shared.sender_try_again(&waker, None, fastpath, backoff);
-                            if state == WakerState::WAITING as u8 {
-                                if let Ok(time_left) = check_timeout(deadline) {
-                                    if let Some(dur) = time_left {
-                                        std::thread::park_timeout(dur);
-                                    } else {
-                                        std::thread::park();
-                                    }
-                                    state = waker.get_state();
-                                } else {
-                                    if shared.abandon_send_waker(waker) {
-                                        return Err(SendTimeoutError::Timeout(unsafe {
-                                            _item.assume_init_read()
-                                        }));
-                                    } else {
-                                        return Ok(());
-                                    }
-                                }
-                            }
+                            state = shared.sender_try_again_blocking(
+                                &mut _item,
+                                &waker,
+                                fastpath,
+                                backoff_conf,
+                            );
+                            debug_assert!(state != WakerState::INIT as u8);
                         }
                         Err(s) => {
                             state = s;
                         }
                     }
-                    process_state!(state);
-                    if state == WakerState::WAKED as u8 {
+                    if state == WakerState::WAITING as u8 {
+                        if let Ok(time_left) = check_timeout(deadline) {
+                            if let Some(dur) = time_left {
+                                std::thread::park_timeout(dur);
+                            } else {
+                                std::thread::park();
+                            }
+                            state = waker.get_state();
+                            if state == WakerState::WAITING as u8 {
+                                state = shared.sender_try_again_blocking(
+                                    &mut _item,
+                                    &waker,
+                                    fastpath,
+                                    backoff_conf,
+                                );
+                            }
+                            debug_assert!(state != WakerState::INIT as u8);
+                        } else {
+                            if shared.abandon_send_waker(waker) {
+                                return Err(SendTimeoutError::Timeout(unsafe {
+                                    _item.assume_init_read()
+                                }));
+                            } else {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    if state == WakerState::DONE as u8 {
+                        self.waker_cache.push(waker);
+                        return Ok(());
+                    } else if state == WakerState::WAKED as u8 {
                         if shared.try_send(&_item).is_ok() {
                             shared.on_send();
                             self.waker_cache.push(waker);
                             return Ok(());
                         }
-                    } else {
-                        // Waited due to park_timeout or spurious waked
-                        let state = shared.sender_try_again(&waker, None, fastpath, backoff);
-                        process_state!(state);
+                    } else if state == WakerState::CLOSED as u8 {
+                        return Err(SendTimeoutError::Disconnected(unsafe {
+                            _item.assume_init_read()
+                        }));
                     }
                 }
             }
