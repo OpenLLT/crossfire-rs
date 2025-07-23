@@ -263,7 +263,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
         let seq = guard.seq.wrapping_add(1);
         guard.seq = seq;
         waker.set_seq(seq);
-        if guard.queue.is_empty() {
+        if self.is_empty.load(Ordering::Relaxed) {
             self.is_empty.store(false, Ordering::Release);
             guard.queue.push_back(weak);
         } else {
