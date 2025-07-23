@@ -10,12 +10,14 @@ use std::sync::{
 use std::task::*;
 use std::thread;
 
+#[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum WakerState {
-    WAITING = 0,
-    WAKED = 1,
-    DONE = 2,
-    CLOSED = 3, // Channel closed, or timeout cancellation
+    INIT = 0, // A temporary state, https://github.com/frostyplanet/crossfire-rs/issues/22
+    WAITING = 1,
+    WAKED = 2,
+    DONE = 3,
+    CLOSED = 4, // Channel closed, or timeout cancellation
 }
 
 pub trait WakerTrait: Deref<Target = Self::Inner> {
@@ -111,7 +113,7 @@ impl<T> WakerTrait for SendWaker<T> {
 
     #[inline(always)]
     fn get_state(&self) -> u8 {
-        self.0.state.load(Ordering::Acquire)
+        self.0.get_state()
     }
 
     #[inline(always)]
@@ -128,7 +130,7 @@ impl<T> WakerTrait for SendWaker<T> {
                 // It's my waker, stopped
                 return true;
             }
-            inner.wake_simple();
+            let _ = inner.wake_simple();
             return _seq > seq;
         }
         return false;
@@ -200,7 +202,7 @@ impl WakerTrait for RecvWaker {
 
     #[inline(always)]
     fn get_state(&self) -> u8 {
-        self.0.state.load(Ordering::Acquire)
+        self.0.get_state()
     }
 
     #[inline(always)]
@@ -217,7 +219,7 @@ impl WakerTrait for RecvWaker {
                 // It's my waker, stopped
                 return true;
             }
-            inner.wake_simple();
+            let _ = inner.wake_simple();
             return _seq > seq;
         }
         return false;
@@ -284,13 +286,15 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
-    pub fn set_state(&self, state: WakerState) {
+    pub fn set_state(&self, state: WakerState) -> u8 {
+        let _state = state as u8;
         #[cfg(test)]
         {
-            let state = self.state.load(Ordering::Acquire);
-            assert!(state <= WakerState::WAKED as u8, "unexpected state: {}", state);
+            let __state = self.get_state();
+            assert!(__state <= WakerState::WAKED as u8, "unexpected state: {}", __state);
         }
-        self.state.store(state as u8, Ordering::Release);
+        self.state.store(_state, Ordering::Release);
+        return _state;
     }
 
     /// Return current status,
@@ -321,6 +325,15 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
+    pub fn commit_waiting(&self) -> u8 {
+        if let Err(s) = self.try_change_state(WakerState::INIT, WakerState::WAITING) {
+            return s;
+        } else {
+            return WakerState::WAITING as u8;
+        }
+    }
+
+    #[inline(always)]
     pub fn is_waked(&self) -> bool {
         self.state.load(Ordering::Acquire) >= WakerState::WAKED as u8
     }
@@ -331,45 +344,72 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
-    pub fn close(&self) {
+    pub fn close_wake(&self) {
         // should have lock because it will content with abandon()
         loop {
             if let Some(_guard) = self.try_lock_weak() {
-                match self.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
-                    Ok(_) => {
-                        self._wake_nolock();
-                        return;
-                    }
-                    Err(_s) => {
-                        debug_assert!(_s >= WakerState::WAKED as u8, "unexpected state {}", _s);
-                        return;
-                    }
+                if self.change_state_smaller_eq(WakerState::WAITING, WakerState::CLOSED).is_ok() {
+                    self._wake_nolock();
                 }
+                return;
             } else {
                 std::hint::spin_loop();
             }
         }
     }
 
+    // Return Ok(pre_state), otherwise return Err(current_state)
     #[inline(always)]
-    pub fn wake_simple(&self) -> bool {
-        if let WakerType::Blocking(t) = self.get_waker() {
-            if self.try_change_state(WakerState::WAITING, WakerState::WAKED).is_ok() {
-                t.unpark();
-                return true;
-            } else {
-                return false;
+    pub fn change_state_smaller_eq(
+        &self, condition: WakerState, target: WakerState,
+    ) -> Result<u8, u8> {
+        // Save one load()
+        let mut state = condition as u8;
+        loop {
+            match self.state.compare_exchange_weak(
+                state,
+                target as u8,
+                Ordering::SeqCst,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Ok(state);
+                }
+                Err(s) => {
+                    if s > condition as u8 {
+                        return Err(s);
+                    }
+                    state = s;
+                }
             }
+        }
+    }
+
+    #[inline(always)]
+    fn get_state(&self) -> u8 {
+        self.state.load(Ordering::Acquire)
+    }
+
+    /// Assume no lock
+    #[inline(always)]
+    pub fn wake_simple(&self) -> Result<u8, ()> {
+        if let WakerType::Blocking(t) = self.get_waker() {
+            if let Ok(state) = self.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED)
+            {
+                t.unpark();
+                return Ok(state);
+            }
+            return Err(());
         } else {
             loop {
                 if let Some(_guard) = self.try_lock_weak() {
-                    match self.try_change_state(WakerState::WAITING, WakerState::WAKED) {
-                        Ok(_) => {
-                            self._wake_nolock();
-                            return true;
-                        }
-                        Err(_) => return false,
+                    if let Ok(state) =
+                        self.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED)
+                    {
+                        self._wake_nolock();
+                        return Ok(state);
                     }
+                    return Err(());
                 }
                 std::hint::spin_loop();
             }
@@ -428,7 +468,7 @@ impl<P> WakerInner<P> {
         // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
         loop {
             if let Some(_guard) = self.try_lock_weak() {
-                let state = self.state.load(Ordering::Acquire);
+                let state = self.get_state();
                 if state >= WakerState::DONE as u8 {
                     return state;
                 }

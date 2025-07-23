@@ -115,15 +115,17 @@ impl<T> Rx<T> {
             debug_assert!(waker.is_waked());
             loop {
                 if let Ok(time_left) = check_timeout(deadline) {
-                    let _ = shared.reg_recv_blocking(&waker);
+                    if shared.reg_recv_blocking(&waker).is_ok() {
+                        if !shared.is_empty() {
+                            try_recv!(waker);
+                        }
+                        waker.commit_waiting();
+                    }
                     if shared.is_disconnected() {
                         try_recv!(waker);
                         // make sure all msgs received, since we have soonze
                         return Err(RecvTimeoutError::Disconnected);
-                    } else if !shared.is_empty() {
-                        try_recv!(waker);
-                    }
-                    if let Some(dur) = time_left {
+                    } else if let Some(dur) = time_left {
                         std::thread::park_timeout(dur);
                     } else {
                         std::thread::park();
@@ -133,6 +135,7 @@ impl<T> Rx<T> {
                     return Err(RecvTimeoutError::Timeout);
                 }
                 backoff.reset();
+                // Waited due to park_timeout or spurious waked
                 loop {
                     try_recv!(waker);
                     if backoff.is_completed() {
