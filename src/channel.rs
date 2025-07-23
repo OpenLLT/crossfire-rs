@@ -270,7 +270,7 @@ impl<T> ChannelShared<T> {
                 if let Channel::Array(inner) = &self.inner {
                     if unsafe { inner.push_with_ptr(p) }.is_ok() {
                         waker.set_state(WakerState::DONE);
-                        waker._wake(true);
+                        waker._wake_nolock();
                         drop(_guard);
                         self.on_send();
                         return true;
@@ -278,7 +278,7 @@ impl<T> ChannelShared<T> {
                         // still full
                         // Let the sender to re-register
                         waker.set_state(WakerState::WAKED);
-                        waker._wake(true);
+                        waker._wake_nolock();
                         // TODO optimise
                         return true; // Do not try another
                     }
@@ -342,7 +342,7 @@ impl<T> ChannelShared<T> {
                 if let Some(guard) = waker.try_lock_weak() {
                     let state = waker.get_state();
                     try_send!(guard, state);
-                    waker._check_waker(_ctx);
+                    waker._check_waker_nolock(_ctx);
                     return state; // might be WAITING or WAKED
                 }
                 backoff.snooze();

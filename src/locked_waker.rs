@@ -337,7 +337,7 @@ impl<P> WakerInner<P> {
             if let Some(_guard) = self.try_lock_weak() {
                 match self.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
                     Ok(_) => {
-                        self._wake(true);
+                        self._wake_nolock();
                         return;
                     }
                     Err(_s) => {
@@ -361,15 +361,17 @@ impl<P> WakerInner<P> {
                 return false;
             }
         } else {
-            // Async will try to update waker
-            match self.try_change_state(WakerState::WAITING, WakerState::WAKED) {
-                Ok(_) => {
-                    self._wake(false);
-                    return true;
+            loop {
+                if let Some(_guard) = self.try_lock_weak() {
+                    match self.try_change_state(WakerState::WAITING, WakerState::WAKED) {
+                        Ok(_) => {
+                            self._wake_nolock();
+                            return true;
+                        }
+                        Err(_) => return false,
+                    }
                 }
-                Err(_) => {
-                    return false;
-                }
+                std::hint::spin_loop();
             }
         }
     }
@@ -401,7 +403,7 @@ impl<P> WakerInner<P> {
 
     /// no lock version
     #[inline(always)]
-    pub fn _check_waker(&self, ctx: &mut Context) {
+    pub fn _check_waker_nolock(&self, ctx: &mut Context) {
         // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
         // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
         // There might be situation like spurious wakeup, poll() again under no fire() ever
@@ -430,7 +432,7 @@ impl<P> WakerInner<P> {
                 if state >= WakerState::DONE as u8 {
                     return state;
                 }
-                self._check_waker(ctx);
+                self._check_waker_nolock(ctx);
                 return state;
             } else {
                 std::hint::spin_loop();
@@ -438,25 +440,11 @@ impl<P> WakerInner<P> {
         }
     }
 
+    // Assume have lock
     #[inline(always)]
-    pub fn _wake(&self, have_lock: bool) {
+    pub fn _wake_nolock(&self) {
         match self.get_waker() {
-            WakerType::Async(w) => {
-                if have_lock {
-                    w.wake_by_ref();
-                    return;
-                } else {
-                    loop {
-                        if let Some(_guard) = self.try_lock_weak() {
-                            if let WakerType::Async(waker) = self.get_waker() {
-                                waker.wake_by_ref();
-                            }
-                            return;
-                        }
-                        std::hint::spin_loop();
-                    }
-                }
-            }
+            WakerType::Async(w) => w.wake_by_ref(),
             WakerType::Blocking(th) => th.unpark(),
         }
     }

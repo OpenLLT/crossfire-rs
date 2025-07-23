@@ -188,7 +188,7 @@ impl<T> AsyncRx<T> {
                 let _waker;
                 if let Some(waker) = o_waker.as_ref() {
                     if waker.get_state() == WakerState::WAKED as u8 {
-                        waker._check_waker(ctx);
+                        waker._check_waker_nolock(ctx);
                     } else {
                         waker.check_waker(ctx);
                     }
