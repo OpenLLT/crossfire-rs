@@ -280,6 +280,7 @@ impl<P> WakerInner<P> {
         return Ok(());
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub fn get_state_relaxed(&self) -> u8 {
         self.state.load(Ordering::Relaxed)

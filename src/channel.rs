@@ -305,58 +305,61 @@ impl<T> ChannelShared<T> {
     #[inline]
     pub(crate) fn sender_try_again_blocking(
         &self, item: &mut MaybeUninit<T>, waker: &SendWaker<T>, fastpath: bool,
-        backoff_conf: BackoffConfig,
+        backoff: &mut Backoff,
     ) -> u8 {
         // commit_waiting as soon as I can.
-        let mut state;
-        let mut backoff;
-        state = waker.get_state_relaxed();
-        if state >= WakerState::DONE as u8 {
-            return state;
-        }
+        let mut state: u8;
+
         if self.is_full() {
             state = waker.commit_waiting();
             if state >= WakerState::WAKED as u8 {
                 return state;
             }
             _check_closing!(self, waker);
-            backoff = Backoff::new(backoff_conf);
         } else {
-            backoff = Backoff::new(backoff_conf);
             // NOTE: Normally async does not snooze
             if !fastpath {
                 // It's for 8x1, 16x1.
                 backoff.snooze();
             }
-            if self.is_full() {
-                state = waker.commit_waiting();
-                _check_closing!(self, waker);
-            } else if let Some(_guard) = waker.try_lock() {
-                {
-                    state = waker.get_state();
-                    if state >= WakerState::DONE as u8 {
-                        return state;
-                    }
-                    if self.try_send(item).is_ok() {
-                        waker.set_state(WakerState::DONE);
-                        drop(_guard);
-                        if state <= WakerState::WAITING as u8 {
-                            self.senders.cancel_waker();
-                        }
-                        self.on_send();
-                        return WakerState::DONE as u8;
-                    } else {
-                        // Should use compare_exchange for on_recv might wake_simple
-                        state = waker.commit_waiting();
-                    }
+            state = waker.get_state();
+            if state >= WakerState::WAKED as u8 {
+                return state;
+            }
+            if !fastpath {
+                if self.is_full() {
+                    state = waker.commit_waiting();
+                    _check_closing!(self, waker);
                 }
-                // still full
-                _check_closing!(self, waker);
-            } else {
-                // Locked by on_recv, it will check for us
-                // No need to check close.
-                state = waker.get_state();
-                //_check_closing!(self, waker);
+            }
+            if state == WakerState::INIT as u8 {
+                if let Some(_guard) = waker.try_lock() {
+                    {
+                        state = waker.get_state();
+                        if state >= WakerState::DONE as u8 {
+                            return state;
+                        }
+                        if self.try_send(item).is_ok() {
+                            waker.set_state(WakerState::DONE);
+                            drop(_guard);
+                            if state <= WakerState::WAITING as u8 {
+                                self.senders.cancel_waker();
+                            }
+                            self.on_send();
+                            return WakerState::DONE as u8;
+                        } else {
+                            // Should use compare_exchange for on_recv might wake_simple
+                            state = waker.commit_waiting();
+                        }
+                    }
+                    // still full
+                    _check_closing!(self, waker);
+                } else {
+                    // Locked by on_recv, it will check for us
+                    // No need to check close.
+                    state = waker.get_state();
+                    //_check_closing!(self, waker);
+                }
             }
         }
         while state < WakerState::WAKED as u8 {
