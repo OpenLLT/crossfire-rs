@@ -1,3 +1,4 @@
+use crate::backoff::*;
 use crate::{channel::*, AsyncTx, MAsyncTx};
 use std::cell::Cell;
 use std::fmt;
@@ -112,6 +113,10 @@ impl<T: Send + 'static> Tx<T> {
                 debug_assert!(waker.is_waked());
                 let mut state;
                 let backoff_conf = shared.get_backoff_tx();
+                let mut backoff = Backoff::new(backoff_conf);
+                if fastpath {
+                    backoff.snooze();
+                }
                 loop {
                     match shared.reg_send_blocking(&waker) {
                         Ok(()) => {
@@ -119,7 +124,7 @@ impl<T: Send + 'static> Tx<T> {
                                 &mut _item,
                                 &waker,
                                 fastpath,
-                                backoff_conf,
+                                &mut backoff,
                             );
                             debug_assert!(state != WakerState::INIT as u8);
                         }
@@ -134,13 +139,14 @@ impl<T: Send + 'static> Tx<T> {
                             } else {
                                 std::thread::park();
                             }
+                            backoff.reset();
                             state = waker.get_state();
                             if state == WakerState::WAITING as u8 {
                                 state = shared.sender_try_again_blocking(
                                     &mut _item,
                                     &waker,
                                     fastpath,
-                                    backoff_conf,
+                                    &mut backoff,
                                 );
                             }
                             debug_assert!(state != WakerState::INIT as u8);

@@ -1,4 +1,4 @@
-use crate::backoff::BackoffConfig;
+use crate::backoff::*;
 use crate::sink::AsyncSink;
 use crate::{channel::*, MTx, Tx};
 use std::cell::Cell;
@@ -249,14 +249,13 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             }
             if let Err(state) = shared.reg_send_async(_waker) {
                 if state >= WakerState::WAKED as u8 {
-                    if state == WakerState::WAKED as u8 {
-                        continue;
-                    }
+                    debug_assert!(state != WakerState::WAKED as u8, "unexpected state WAKED");
                     return process_state!(state);
                 }
             }
             let config = BackoffConfig { spin_limit: 7, limit: self._detect_runtime() };
-            state = shared.sender_try_again_blocking(item, _waker, true, config);
+            let mut backoff = Backoff::new(config);
+            state = shared.sender_try_again_blocking(item, _waker, true, &mut backoff);
             if state == WakerState::WAITING as u8 {
                 return Poll::Pending;
             } else if state > WakerState::WAKED as u8 {
