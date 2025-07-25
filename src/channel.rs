@@ -251,18 +251,26 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn try_send(&self, item: &MaybeUninit<T>) -> Result<(), ()> {
+    pub(crate) fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         match &self.inner {
+            Channel::Array(inner) => {
+                return unsafe { inner.push_with_ptr(item.as_ptr()) };
+            }
             Channel::List(inner) => {
                 inner.push(unsafe { item.assume_init_read() });
-                return Ok(());
+                return true;
             }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn try_send_oneshot(&self, item: MaybeUninit<T>) -> Option<bool> {
+        match &self.inner {
             Channel::Array(inner) => {
-                if let Err(()) = unsafe { inner.push_with_ptr(item.as_ptr()) } {
-                    return Err(());
-                } else {
-                    return Ok(());
-                }
+                return unsafe { inner.try_push_oneshot(item.as_ptr()) };
+            }
+            Channel::List(_inner) => {
+                unreachable!();
             }
         }
     }
@@ -281,7 +289,7 @@ impl<T> ChannelShared<T> {
                 if state >= WakerState::DONE as u8 {
                     return state;
                 }
-                if self.try_send(item).is_ok() {
+                if self.try_send(item) {
                     waker.set_state(WakerState::DONE);
                     drop(guard);
                     if state <= WakerState::WAITING as u8 {
@@ -339,7 +347,7 @@ impl<T> ChannelShared<T> {
                         if state >= WakerState::DONE as u8 {
                             return state;
                         }
-                        if self.try_send(item).is_ok() {
+                        if self.try_send(item) {
                             waker.set_state(WakerState::DONE);
                             drop(_guard);
                             if state <= WakerState::WAITING as u8 {
@@ -408,7 +416,7 @@ impl<T> ChannelShared<T> {
                 let p = waker.payload.load(Ordering::Acquire);
                 debug_assert!(p != ptr::null_mut());
                 if let Channel::Array(inner) = &self.inner {
-                    if unsafe { inner.push_with_ptr(p) }.is_ok() {
+                    if unsafe { inner.push_with_ptr(p) } {
                         waker.set_state(WakerState::DONE);
                         waker._wake_nolock();
                         drop(_guard);

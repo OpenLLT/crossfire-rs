@@ -131,14 +131,11 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             return Err(TrySendError::Disconnected(item));
         }
         let _item = MaybeUninit::new(item);
-        match self.shared.try_send(&_item) {
-            Err(()) => {
-                return unsafe { Err(TrySendError::Full(_item.assume_init())) };
-            }
-            Ok(_) => {
-                self.shared.on_send();
-                return Ok(());
-            }
+        if self.shared.try_send(&_item) {
+            self.shared.on_send();
+            return Ok(());
+        } else {
+            return unsafe { Err(TrySendError::Full(_item.assume_init())) };
         }
     }
 
@@ -208,7 +205,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 if state >= WakerState::DONE as u8 {
                     return process_state!(state);
                 } else if state == WakerState::WAKED as u8 {
-                    if shared.try_send(item).is_ok() {
+                    if shared.try_send(item) {
                         let _ = o_waker.take();
                         shared.on_send();
                         return Poll::Ready(Ok(()));
@@ -231,7 +228,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 }
                 _waker = waker;
             } else {
-                if shared.try_send(item).is_ok() {
+                if shared.try_send(item) {
                     shared.on_send();
                     return Poll::Ready(Ok(()));
                 }
