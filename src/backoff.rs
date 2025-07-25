@@ -40,13 +40,24 @@ impl BackoffConfig {
 
 pub struct Backoff {
     step: u32,
-    config: BackoffConfig,
+    pub config: BackoffConfig,
 }
 
 impl Backoff {
     #[inline(always)]
     pub fn new(config: BackoffConfig) -> Self {
         Self { step: 0, config }
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub fn spin(&mut self) {
+        for _ in 0..1 << self.step.min(SPIN_LIMIT as u32) {
+            std::hint::spin_loop();
+        }
+        if self.step < MAX_LIMIT as u32 {
+            self.step += 1;
+        }
     }
 
     #[inline(always)]
