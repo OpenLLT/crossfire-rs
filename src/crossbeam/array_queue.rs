@@ -236,13 +236,13 @@ impl<T> ArrayQueue<T> {
         let mut tail = self.tail.load(Ordering::Relaxed);
         macro_rules! check_full {
             ($tail: expr) => {
-                atomic::fence(Ordering::SeqCst);
-                let head = self.head.load(Ordering::Relaxed);
+                let head = self.head.load(Ordering::SeqCst);
                 // If the head lags one lap behind the tail as well...
                 if head.wrapping_add(self.one_lap) == $tail {
                     // ...then the queue is full.
                     return false;
                 }
+                atomic::fence(Ordering::SeqCst);
             };
         }
         loop {
