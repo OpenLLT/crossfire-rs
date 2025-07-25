@@ -113,26 +113,41 @@ impl<T> Rx<T> {
             }
             let waker = self.waker_cache.new_blocking();
             debug_assert!(waker.is_waked());
+            let mut state;
             loop {
-                if let Ok(time_left) = check_timeout(deadline) {
-                    if shared.reg_recv_blocking(&waker).is_ok() {
+                match shared.reg_recv_blocking(&waker) {
+                    Ok(_) => {
                         if !shared.is_empty() {
                             try_recv!(waker);
                         }
-                        waker.commit_waiting();
+                        state = waker.commit_waiting();
+                        if shared.is_disconnected() {
+                            try_recv!(waker);
+                            // make sure all msgs received, since we have soonze
+                            return Err(RecvTimeoutError::Disconnected);
+                        }
                     }
-                    if shared.is_disconnected() {
-                        try_recv!(waker);
-                        // make sure all msgs received, since we have soonze
-                        return Err(RecvTimeoutError::Disconnected);
-                    } else if let Some(dur) = time_left {
-                        std::thread::park_timeout(dur);
+                    Err(s) => {
+                        state = s;
+                    }
+                }
+                while state == WakerState::WAITING as u8 {
+                    if let Ok(time_left) = check_timeout(deadline) {
+                        if let Some(dur) = time_left {
+                            std::thread::park_timeout(dur);
+                        } else {
+                            std::thread::park();
+                        }
+                        state = waker.get_state();
                     } else {
-                        std::thread::park();
+                        let _ = shared.abandon_recv_waker(waker);
+                        return Err(RecvTimeoutError::Timeout);
                     }
-                } else {
-                    let _ = shared.abandon_recv_waker(waker);
-                    return Err(RecvTimeoutError::Timeout);
+                }
+                if state == WakerState::CLOSED as u8 {
+                    try_recv!(waker);
+                    // make sure all msgs received, since we have soonze
+                    return Err(RecvTimeoutError::Disconnected);
                 }
                 backoff.reset();
                 // Waited due to park_timeout or spurious waked
