@@ -79,14 +79,11 @@ impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
     fn _try_send(shared: &ChannelShared<T>, item: T) -> Result<(), T> {
         let _item = MaybeUninit::new(item);
-        match shared.try_send(&_item) {
-            Err(()) => {
-                return Err(unsafe { _item.assume_init_read() });
-            }
-            Ok(_) => {
-                shared.on_send();
-                return Ok(());
-            }
+        if shared.try_send(&_item) {
+            shared.on_send();
+            return Ok(());
+        } else {
+            return Err(unsafe { _item.assume_init_read() });
         }
     }
 
@@ -104,7 +101,7 @@ impl<T: Send + 'static> Tx<T> {
             } else {
                 let mut _item = MaybeUninit::new(item);
                 if fastpath {
-                    if shared.try_send(&_item).is_ok() {
+                    if shared.try_send(&_item) {
                         shared.on_send();
                         return Ok(());
                     }
@@ -164,7 +161,7 @@ impl<T: Send + 'static> Tx<T> {
                         self.waker_cache.push(waker);
                         return Ok(());
                     } else if state == WakerState::WAKED as u8 {
-                        if shared.try_send(&_item).is_ok() {
+                        if shared.try_send(&_item) {
                             shared.on_send();
                             self.waker_cache.push(waker);
                             return Ok(());

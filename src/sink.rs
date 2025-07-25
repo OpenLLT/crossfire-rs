@@ -67,7 +67,7 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     pub fn poll_send(&mut self, ctx: &mut Context, item: T) -> Result<(), TrySendError<T>> {
         let mut _item = MaybeUninit::new(item);
         let shared = &self.tx.shared;
-        if shared.try_send(&_item).is_ok() {
+        if shared.try_send(&_item) {
             shared.on_send();
             return Ok(());
         }
