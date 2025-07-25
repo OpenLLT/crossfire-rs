@@ -203,7 +203,7 @@ impl<T> AsyncRx<T> {
                     o_waker.replace(waker);
                     _waker = o_waker.as_ref().unwrap();
                 }
-                if shared.reg_recv_async(_waker).is_ok() {
+                if shared.reg_recv(_waker).is_ok() {
                     // NOTE: The other side put something whie reg_send and did not see the waker,
                     // should check the channel again, otherwise might incur a dead lock.
                     if !shared.is_empty() {

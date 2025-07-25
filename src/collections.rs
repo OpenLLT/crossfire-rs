@@ -109,6 +109,7 @@ impl<T> WeakCell<T> {
         }
     }
 
+    #[inline(always)]
     pub fn clear(&self) {
         let mut v = self.ptr.load(Ordering::Acquire);
         if v == ptr::null_mut() {
