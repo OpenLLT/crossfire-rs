@@ -324,13 +324,12 @@ impl<T> ArrayQueue<T> {
                     }
                 }
             } else if stamp == head {
-                atomic::fence(Ordering::SeqCst);
-                let tail = self.tail.load(Ordering::Relaxed);
-
+                let tail = self.tail.load(Ordering::SeqCst);
                 // If the tail equals the head, that means the channel is empty.
                 if tail == head {
                     return None;
                 }
+                atomic::fence(Ordering::SeqCst);
 
                 backoff.spin();
                 head = self.head.load(Ordering::Relaxed);
