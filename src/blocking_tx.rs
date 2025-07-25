@@ -140,22 +140,14 @@ impl<T: Send + 'static> Tx<T> {
                             state = s;
                         }
                     }
-                    if state == WakerState::WAITING as u8 {
+                    while state == WakerState::WAITING as u8 {
                         if let Ok(time_left) = check_timeout(deadline) {
                             if let Some(dur) = time_left {
                                 std::thread::park_timeout(dur);
                             } else {
                                 std::thread::park();
                             }
-                            backoff.reset();
                             state = waker.get_state();
-                            if state == WakerState::WAITING as u8 {
-                                state = shared.sender_try_again_blocking(
-                                    &mut _item,
-                                    &waker,
-                                    &mut backoff,
-                                );
-                            }
                         } else {
                             if shared.abandon_send_waker(waker) {
                                 return Err(SendTimeoutError::Timeout(unsafe {
@@ -166,6 +158,7 @@ impl<T: Send + 'static> Tx<T> {
                             }
                         }
                     }
+                    backoff.reset();
                     if state == WakerState::DONE as u8 {
                         return_ok!(waker);
                     } else if state == WakerState::WAKED as u8 {
