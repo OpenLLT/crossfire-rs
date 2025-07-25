@@ -226,24 +226,17 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     }
                     // register again
                 }
-                _waker = waker;
             } else {
                 if shared.send(item) {
                     shared.on_send();
                     return Poll::Ready(Ok(()));
                 }
-                o_waker.replace(SendWaker::new_async(ctx));
-                _waker = o_waker.as_ref().unwrap();
-            }
-            if let Err(state) = shared.reg_send_async(_waker) {
-                if state >= WakerState::WAKED as u8 {
-                    debug_assert!(state != WakerState::WAKED as u8, "unexpected state WAKED");
-                    return process_state!(state);
-                }
             }
             let config = BackoffConfig { spin_limit: 7, limit: self._detect_runtime() };
             let mut backoff = Backoff::new(config);
-            state = shared.sender_try_again_blocking(item, _waker, &mut backoff);
+            let waker = if let Some(w) = o_waker.take() { w } else { SendWaker::new_async(ctx) };
+            (state, _waker) = shared.sender_reg_and_try(item, waker, true, &mut backoff);
+            *o_waker = _waker;
             if state == WakerState::WAITING as u8 {
                 return Poll::Pending;
             } else if state > WakerState::WAKED as u8 {

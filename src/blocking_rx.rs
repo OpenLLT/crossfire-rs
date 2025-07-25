@@ -114,17 +114,16 @@ impl<T> Rx<T> {
             let waker = self.waker_cache.new_blocking();
             debug_assert!(waker.is_waked());
             let mut state;
-            loop {
-                match shared.reg_recv_blocking(&waker) {
+            'MAIN: loop {
+                match shared.reg_recv(&waker) {
                     Ok(_) => {
-                        if !shared.is_empty() {
-                            try_recv!(waker);
-                        }
-                        state = waker.commit_waiting();
-                        if shared.is_disconnected() {
-                            try_recv!(waker);
-                            // make sure all msgs received, since we have soonze
-                            return Err(RecvTimeoutError::Disconnected);
+                        if shared.is_empty() {
+                            if shared.is_disconnected() {
+                                break 'MAIN;
+                            }
+                            state = waker.commit_waiting();
+                        } else {
+                            state = waker.cancel();
                         }
                     }
                     Err(s) => {
@@ -145,9 +144,7 @@ impl<T> Rx<T> {
                     }
                 }
                 if state == WakerState::CLOSED as u8 {
-                    try_recv!(waker);
-                    // make sure all msgs received, since we have soonze
-                    return Err(RecvTimeoutError::Disconnected);
+                    break 'MAIN;
                 }
                 backoff.reset();
                 // Waited due to park_timeout or spurious waked
@@ -159,6 +156,9 @@ impl<T> Rx<T> {
                     backoff.snooze();
                 }
             }
+            try_recv!(waker);
+            // make sure all msgs received, since we have soonze
+            return Err(RecvTimeoutError::Disconnected);
         }
     }
 

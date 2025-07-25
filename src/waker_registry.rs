@@ -3,6 +3,7 @@ use crate::locked_waker::*;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
+use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Weak;
 
@@ -24,38 +25,16 @@ impl<T> RegistrySender<T> {
 
     /// For async context
     #[inline(always)]
-    pub fn reg_async(&self, waker: &SendWaker<T>) -> Result<(), u8> {
-        let state = waker.get_state();
-        if state == WakerState::WAKED as u8 {
-            waker.set_state(WakerState::WAITING);
-        } else {
-            // Might be WAITING
-            return Err(state);
-        }
+    pub fn reg_waker(&self, waker: &SendWaker<T>) {
+        debug_assert_eq!(waker.get_state(), WakerState::WAKED as u8);
+        waker.set_state(WakerState::WAITING);
+        // Clear the ptr in waker if it want to re-register
+        waker.set_ptr(ptr::null_mut());
         match self {
-            RegistrySender::Single(inner) => inner.reg_async(waker),
-            RegistrySender::Multi(inner) => inner.reg_async(waker),
+            RegistrySender::Single(inner) => inner.reg_waker(waker),
+            RegistrySender::Multi(inner) => inner.reg_waker(waker),
             RegistrySender::Dummy(_) => {}
         }
-        Ok(())
-    }
-
-    /// For thread context
-    #[inline(always)]
-    pub fn reg_blocking(&self, waker: &SendWaker<T>) -> Result<(), u8> {
-        let state = waker.get_state();
-        if state == WakerState::WAKED as u8 {
-            waker.set_state(WakerState::WAITING);
-        } else {
-            // Might be WAITING
-            return Err(state);
-        }
-        match self {
-            RegistrySender::Single(inner) => inner.reg_blocking(waker),
-            RegistrySender::Multi(inner) => inner.reg_blocking(waker),
-            RegistrySender::Dummy(_) => {}
-        }
-        Ok(())
     }
 
     #[inline(always)]
@@ -102,7 +81,7 @@ pub enum RegistryRecv {
 impl RegistryRecv {
     /// For async context
     #[inline(always)]
-    pub fn reg_async(&self, waker: &RecvWaker) -> Result<(), u8> {
+    pub fn reg_waker(&self, waker: &RecvWaker) -> Result<(), u8> {
         let state = waker.get_state();
         if state == WakerState::WAKED as u8 {
             waker.set_state(WakerState::INIT);
@@ -111,25 +90,8 @@ impl RegistryRecv {
             return Err(state);
         }
         match self {
-            RegistryRecv::Single(inner) => inner.reg_async(waker),
-            RegistryRecv::Multi(inner) => inner.reg_async(waker),
-        }
-        Ok(())
-    }
-
-    /// For thread context
-    #[inline(always)]
-    pub fn reg_blocking(&self, waker: &RecvWaker) -> Result<(), u8> {
-        let state = waker.get_state();
-        if state == WakerState::WAKED as u8 {
-            waker.set_state(WakerState::INIT);
-        } else {
-            // Might be WAITING
-            return Err(state);
-        }
-        match self {
-            RegistryRecv::Single(inner) => inner.reg_blocking(waker),
-            RegistryRecv::Multi(inner) => inner.reg_blocking(waker),
+            RegistryRecv::Single(inner) => inner.reg_waker(waker),
+            RegistryRecv::Multi(inner) => inner.reg_waker(waker),
         }
         Ok(())
     }
@@ -194,12 +156,7 @@ impl<W: WakerTrait> RegistrySingle<W> {
 
     /// return is_skip
     #[inline(always)]
-    fn reg_async(&self, waker: &W) {
-        self.cell.put(waker.weak());
-    }
-
-    #[inline(always)]
-    fn reg_blocking(&self, waker: &W) {
+    fn reg_waker(&self, waker: &W) {
         self.cell.put(waker.weak());
     }
 
@@ -277,13 +234,8 @@ impl<W: WakerTrait> RegistryMulti<W> {
     }
 
     #[inline(always)]
-    fn reg_async(&self, waker: &W) {
+    fn reg_waker(&self, waker: &W) {
         self.push(&waker);
-    }
-
-    #[inline(always)]
-    fn reg_blocking(&self, waker: &W) {
-        self.push(waker);
     }
 
     /// Call when ReceiveFuture is cancelled.

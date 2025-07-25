@@ -109,6 +109,18 @@ impl<T> WeakCell<T> {
         }
     }
 
+    /// when false when the item already taken by others
+    #[inline(always)]
+    pub fn swap_and_drop(&self) -> bool {
+        let v = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
+        if v == ptr::null_mut() {
+            return false;
+        }
+        let _ = unsafe { Weak::from_raw(v) };
+        return true;
+    }
+
+    #[inline(always)]
     pub fn clear(&self) {
         let mut v = self.ptr.load(Ordering::Acquire);
         if v == ptr::null_mut() {

@@ -52,6 +52,14 @@ pub struct SendWaker<T>(Arc<WakerInner<AtomicPtr<T>>>);
 
 impl<T> SendWaker<T> {
     #[inline(always)]
+    pub fn cancel(&self) -> u8 {
+        match self.try_change_state(WakerState::WAITING, WakerState::WAKED) {
+            Ok(_) => return WakerState::WAKED as u8,
+            Err(s) => return s,
+        }
+    }
+
+    #[inline(always)]
     pub fn set_ptr(&self, p: *mut T) {
         self.payload.store(p, Ordering::Release);
     }
@@ -159,6 +167,16 @@ impl Deref for RecvWaker {
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
+    }
+}
+
+impl RecvWaker {
+    #[inline(always)]
+    pub fn cancel(&self) -> u8 {
+        match self.try_change_state(WakerState::INIT, WakerState::WAKED) {
+            Ok(_) => return WakerState::WAKED as u8,
+            Err(s) => return s,
+        }
     }
 }
 
@@ -308,8 +326,10 @@ impl<P> WakerInner<P> {
         let _state = state as u8;
         #[cfg(test)]
         {
-            let __state = self.get_state();
-            assert!(__state <= WakerState::WAKED as u8, "unexpected state: {}", __state);
+            if _state != WakerState::CLOSED as u8 {
+                let __state = self.get_state();
+                assert!(__state <= WakerState::WAKED as u8, "unexpected state: {}", __state);
+            }
         }
         self.state.store(_state, Ordering::Release);
         return _state;
@@ -357,11 +377,6 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
-    pub fn is_locked(&self) -> bool {
-        self.locked.load(Ordering::Acquire)
-    }
-
-    #[inline(always)]
     pub fn close_wake(&self) {
         // should have lock because it will content with abandon()
         loop {
@@ -372,6 +387,18 @@ impl<P> WakerInner<P> {
                 return;
             } else {
                 std::hint::spin_loop();
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn active_close(&self) -> u8 {
+        match self.change_state_smaller_eq(WakerState::WAKED, WakerState::CLOSED) {
+            Ok(_) => {
+                return WakerState::CLOSED as u8;
+            }
+            Err(s) => {
+                return s;
             }
         }
     }
