@@ -150,7 +150,7 @@ impl<T> ArrayQueue<T> {
     #[allow(dead_code)]
     #[inline(always)]
     pub unsafe fn try_push_oneshot(&self, value: *const T) -> Option<bool> {
-        let mut tail = self.tail.load(Ordering::Relaxed);
+        let mut tail = self.tail.load(Ordering::Acquire);
         if let Ok(res) = self._try_push(&mut tail, value) {
             Some(res)
         } else {
@@ -204,7 +204,7 @@ impl<T> ArrayQueue<T> {
             }
         } else if stamp.wrapping_add(self.one_lap) == tail + 1 {
             atomic::fence(Ordering::SeqCst);
-            let head = self.head.load(Ordering::Relaxed);
+            let head = self.head.load(Ordering::Acquire);
             // If the head lags one lap behind the tail as well...
             if head.wrapping_add(self.one_lap) == tail {
                 // ...then the queue is full.

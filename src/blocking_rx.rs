@@ -111,7 +111,7 @@ impl<T> Rx<T> {
                     break;
                 }
             }
-            let waker = self.waker_cache.new_blocking(());
+            let waker = self.waker_cache.new_blocking();
             debug_assert!(waker.is_waked());
             loop {
                 if let Ok(time_left) = check_timeout(deadline) {

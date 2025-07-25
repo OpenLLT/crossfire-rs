@@ -251,7 +251,7 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn try_send(&self, item: &MaybeUninit<T>) -> bool {
+    pub(crate) fn send(&self, item: &MaybeUninit<T>) -> bool {
         match &self.inner {
             Channel::Array(inner) => {
                 return unsafe { inner.push_with_ptr(item.as_ptr()) };
@@ -264,7 +264,7 @@ impl<T> ChannelShared<T> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn try_send_oneshot(&self, item: MaybeUninit<T>) -> Option<bool> {
+    pub(crate) fn try_send_oneshot(&self, item: &MaybeUninit<T>) -> Option<bool> {
         match &self.inner {
             Channel::Array(inner) => {
                 return unsafe { inner.try_push_oneshot(item.as_ptr()) };
@@ -285,11 +285,11 @@ impl<T> ChannelShared<T> {
         // Assume WAITING, must check_waker
         loop {
             if let Some(guard) = waker.try_lock_weak() {
-                let mut state = waker.get_state();
+                let state = waker.get_state();
                 if state >= WakerState::DONE as u8 {
                     return state;
                 }
-                if self.try_send(item) {
+                if self.send(item) {
                     waker.set_state(WakerState::DONE);
                     drop(guard);
                     if state <= WakerState::WAITING as u8 {
@@ -298,8 +298,7 @@ impl<T> ChannelShared<T> {
                     self.on_send();
                     return WakerState::DONE as u8;
                 } else {
-                    // Should use compare_exchange for on_recv might wake_simple
-                    state = waker.commit_waiting();
+                    assert!(waker.load_ptr() != ptr::null_mut());
                 }
                 waker._check_waker_nolock(ctx);
                 return state; // might be WAITING or WAKED
@@ -312,42 +311,59 @@ impl<T> ChannelShared<T> {
     /// when need_wake == false, will always return Some(state).
     #[inline]
     pub(crate) fn sender_try_again_blocking(
-        &self, item: &mut MaybeUninit<T>, waker: &SendWaker<T>, fastpath: bool,
-        backoff: &mut Backoff,
+        &self, item: &mut MaybeUninit<T>, waker: &SendWaker<T>, backoff: &mut Backoff,
     ) -> u8 {
-        // commit_waiting as soon as I can.
         let mut state: u8;
-
-        if self.is_full() {
-            state = waker.commit_waiting();
-            if state >= WakerState::WAKED as u8 {
-                return state;
-            }
-            _check_closing!(self, waker);
-        } else {
+        let mut is_certain: bool = waker.load_ptr() != ptr::null_mut();
+        // It's possible Spurious wake and enter this function again;
+        if !is_certain {
             // NOTE: Normally async does not snooze
-            if !fastpath {
-                // It's for 8x1, 16x1.
-                backoff.snooze();
+            if let Some(res) = self.try_send_oneshot(item) {
+                if res {
+                    waker.set_state(WakerState::DONE);
+                    self.senders.cancel_waker();
+                    self.on_send();
+                    return WakerState::DONE as u8;
+                } else {
+                    waker.set_ptr(item.as_mut_ptr());
+                    is_certain = true;
+                }
+            } else {
+                waker.set_ptr(item.as_mut_ptr());
             }
-            state = waker.get_state();
-            if state >= WakerState::WAKED as u8 {
-                return state;
-            }
-            if !fastpath {
+        } else {
+            // re-entry should try with lock, it prevent deadlock, why?
+            is_certain = false;
+        }
+        state = waker.get_state_relaxed();
+        if state >= WakerState::WAKED as u8 {
+            return state;
+        }
+        if !backoff.is_completed() {
+            backoff.snooze();
+        }
+        state = waker.get_state();
+        _check_closing!(self, waker);
+        while state < WakerState::WAKED as u8 {
+            if !is_certain {
                 if self.is_full() {
-                    state = waker.commit_waiting();
-                    _check_closing!(self, waker);
+                    is_certain = true;
+                } else {
                 }
             }
-            if state == WakerState::INIT as u8 {
-                if let Some(_guard) = waker.try_lock() {
-                    {
+            if backoff.is_completed() && waker.is_locked() == false {
+                // Check lock state, if there's no receiver, should not spin forever.
+                // If already see by receiver, but we should ensure the waker is ok.
+                // When overloaded, we'd better park.
+                if is_certain {
+                    return waker.get_state();
+                } else {
+                    if let Some(_guard) = waker.try_lock() {
                         state = waker.get_state();
-                        if state >= WakerState::DONE as u8 {
+                        if state > WakerState::WAKED as u8 {
                             return state;
                         }
-                        if self.try_send(item) {
+                        if self.send(item) {
                             waker.set_state(WakerState::DONE);
                             drop(_guard);
                             if state <= WakerState::WAITING as u8 {
@@ -355,29 +371,12 @@ impl<T> ChannelShared<T> {
                             }
                             self.on_send();
                             return WakerState::DONE as u8;
-                        } else {
-                            // Should use compare_exchange for on_recv might wake_simple
-                            state = waker.commit_waiting();
                         }
+                        return state;
+                    } else {
+                        // wait a little more for on_recv() result ?
+                        is_certain = true;
                     }
-                    // still full
-                    _check_closing!(self, waker);
-                } else {
-                    // Locked by on_recv, it will check for us
-                    // No need to check close.
-                    state = waker.get_state();
-                    //_check_closing!(self, waker);
-                }
-            }
-        }
-        while state < WakerState::WAKED as u8 {
-            if backoff.is_completed() && waker.is_locked() == false {
-                // Check lock state, if there's no receiver, should not spin forever.
-                // If already see by receiver, but we should ensure the waker is ok.
-                // When overloaded, we'd better park.
-                //
-                if state > WakerState::INIT as u8 {
-                    return state;
                 }
             }
             backoff.snooze();
@@ -392,11 +391,8 @@ impl<T> ChannelShared<T> {
         let mut _backoff: Option<Backoff> = None;
         macro_rules! wake_early {
             ($waker: expr, $res: expr) => {
-                if let Ok(state) = $waker.wake_simple() {
-                    if state == WakerState::INIT as u8 {
-                        return $res;
-                    }
-                    return true;
+                if let Ok(_) = $waker.wake_simple() {
+                    return $res;
                 } else {
                     return false;
                 }
@@ -407,14 +403,22 @@ impl<T> ChannelShared<T> {
                 let state = waker.get_state();
                 if state >= WakerState::WAKED as u8 {
                     // It's not possible to be WAKED
-                    // On CLOSED, its abandoning send. if it's DONE consider we waked
-                    return self.is_full();
+                    return false;
                 }
                 // the receiver no need to check disconnect,
                 // its impossible if there's live waker
                 // Check the state again, during locked, no one allowed to change the status
-                let p = waker.payload.load(Ordering::Acquire);
-                debug_assert!(p != ptr::null_mut());
+                let p = waker.load_ptr();
+                if p == ptr::null_mut() {
+                    // Let the sender to re-register
+                    // Might contend with sender_try_again_blocking
+                    if waker.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED).is_ok()
+                    {
+                        waker._wake_nolock();
+                    }
+                    drop(_guard);
+                    return self.is_full();
+                }
                 if let Channel::Array(inner) = &self.inner {
                     if unsafe { inner.push_with_ptr(p) } {
                         waker.set_state(WakerState::DONE);
@@ -433,13 +437,13 @@ impl<T> ChannelShared<T> {
                 return true; // Do not try another
             } else {
                 if let Some(backoff) = _backoff.as_mut() {
-                    if backoff.is_completed() {
+                    if backoff.is_completed() || self.senders.is_empty() {
                         wake_early!(waker, self.is_full());
                     } else {
                         backoff.snooze();
                     }
                 } else {
-                    if !self.tx_control.load(Ordering::Relaxed) {
+                    if self.senders.is_empty() {
                         wake_early!(waker, false);
                     }
                     let mut backoff = Backoff::new(self.get_backoff_rx());

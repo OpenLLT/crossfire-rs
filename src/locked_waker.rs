@@ -3,6 +3,7 @@ use crate::collections::ArcCell;
 use std::cell::UnsafeCell;
 use std::mem::transmute;
 use std::ops::Deref;
+use std::ptr;
 use std::sync::{
     atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering},
     Arc, Weak,
@@ -23,17 +24,17 @@ pub enum WakerState {
 pub trait WakerTrait: Deref<Target = Self::Inner> {
     type Inner;
 
-    type Payload;
-
     fn from_arc(inner: Arc<Self::Inner>) -> Self;
 
     fn to_arc(self) -> Arc<Self::Inner>;
 
-    fn update_blocking_payload(inner: &Arc<Self::Inner>, payload: Self::Payload);
+    fn reset(inner: &Arc<Self::Inner>);
 
-    fn new_async(ctx: &Context, payload: Self::Payload) -> Self;
+    fn update_blocking_thread(inner: &Arc<Self::Inner>);
 
-    fn new_blocking(payload: Self::Payload) -> Self;
+    fn new_async(ctx: &Context) -> Self;
+
+    fn new_blocking() -> Self;
 
     fn get_seq(&self) -> usize;
 
@@ -49,6 +50,18 @@ pub trait WakerTrait: Deref<Target = Self::Inner> {
 
 pub struct SendWaker<T>(Arc<WakerInner<AtomicPtr<T>>>);
 
+impl<T> SendWaker<T> {
+    #[inline(always)]
+    pub fn set_ptr(&self, p: *mut T) {
+        self.payload.store(p, Ordering::Release);
+    }
+
+    #[inline(always)]
+    pub fn load_ptr(&self) -> *mut T {
+        self.payload.load(Ordering::Acquire)
+    }
+}
+
 impl<T> Deref for SendWaker<T> {
     type Target = WakerInner<AtomicPtr<T>>;
     #[inline]
@@ -59,8 +72,6 @@ impl<T> Deref for SendWaker<T> {
 
 impl<T> WakerTrait for SendWaker<T> {
     type Inner = WakerInner<AtomicPtr<T>>;
-
-    type Payload = *mut T;
 
     #[inline(always)]
     fn from_arc(inner: Arc<Self::Inner>) -> Self {
@@ -73,31 +84,35 @@ impl<T> WakerTrait for SendWaker<T> {
     }
 
     #[inline(always)]
-    fn new_async(ctx: &Context, payload: Self::Payload) -> Self {
+    fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
             locked: AtomicBool::new(false),
             state: AtomicU8::new(WakerState::WAKED as u8),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
-            payload: AtomicPtr::new(payload),
+            payload: AtomicPtr::new(ptr::null_mut()),
         }))
     }
 
     #[inline(always)]
-    fn new_blocking(payload: Self::Payload) -> Self {
+    fn new_blocking() -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
             locked: AtomicBool::new(false),
             state: AtomicU8::new(WakerState::WAKED as u8),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
-            payload: AtomicPtr::new(payload),
+            payload: AtomicPtr::new(ptr::null_mut()),
         }))
     }
 
     #[inline(always)]
-    fn update_blocking_payload(inner: &Arc<Self::Inner>, payload: Self::Payload) {
+    fn reset(inner: &Arc<Self::Inner>) {
         inner.state.store(WakerState::WAKED as u8, Ordering::Release);
-        inner.payload.store(payload, Ordering::Release);
+        inner.payload.store(ptr::null_mut(), Ordering::Release);
+    }
+
+    #[inline(always)]
+    fn update_blocking_thread(inner: &Arc<Self::Inner>) {
         inner.update_thread_handle();
     }
 
@@ -150,8 +165,6 @@ impl Deref for RecvWaker {
 impl WakerTrait for RecvWaker {
     type Inner = WakerInner<()>;
 
-    type Payload = ();
-
     #[inline(always)]
     fn from_arc(inner: Arc<Self::Inner>) -> Self {
         Self(inner)
@@ -163,30 +176,34 @@ impl WakerTrait for RecvWaker {
     }
 
     #[inline(always)]
-    fn new_async(ctx: &Context, payload: Self::Payload) -> Self {
+    fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
             locked: AtomicBool::new(false),
             state: AtomicU8::new(WakerState::WAKED as u8),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
-            payload,
+            payload: (),
         }))
     }
 
     #[inline(always)]
-    fn new_blocking(payload: Self::Payload) -> Self {
+    fn new_blocking() -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
             locked: AtomicBool::new(false),
             state: AtomicU8::new(WakerState::WAKED as u8),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
-            payload,
+            payload: (),
         }))
     }
 
     #[inline(always)]
-    fn update_blocking_payload(inner: &Arc<Self::Inner>, _payload: Self::Payload) {
+    fn reset(inner: &Arc<Self::Inner>) {
         inner.state.store(WakerState::WAKED as u8, Ordering::Release);
+    }
+
+    #[inline(always)]
+    fn update_blocking_thread(inner: &Arc<Self::Inner>) {
         inner.update_thread_handle();
     }
 
@@ -500,12 +517,12 @@ impl<T: WakerTrait> WakerCache<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn new_blocking(&self, payload: T::Payload) -> T {
+    pub(crate) fn new_blocking(&self) -> T {
         if let Some(inner) = self.0.pop() {
-            T::update_blocking_payload(&inner, payload);
+            T::update_blocking_thread(&inner);
             return T::from_arc(inner);
         }
-        return T::new_blocking(payload);
+        return T::new_blocking();
     }
 
     #[inline(always)]
@@ -515,6 +532,7 @@ impl<T: WakerTrait> WakerCache<T> {
         }
         let a = waker.to_arc();
         if Arc::weak_count(&a) == 0 && Arc::strong_count(&a) == 1 {
+            T::reset(&a);
             self.0.try_put(a);
         }
     }

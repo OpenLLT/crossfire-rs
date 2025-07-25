@@ -28,7 +28,7 @@ impl<T> RegistrySender<T> {
     pub fn reg_async(&self, waker: &SendWaker<T>) -> Result<(), u8> {
         let state = waker.get_state();
         if state == WakerState::WAKED as u8 {
-            waker.set_state(WakerState::INIT);
+            waker.set_state(WakerState::WAITING);
         } else {
             // Might be WAITING
             return Err(state);
@@ -46,7 +46,7 @@ impl<T> RegistrySender<T> {
     pub fn reg_blocking(&self, waker: &SendWaker<T>) -> Result<(), u8> {
         let state = waker.get_state();
         if state == WakerState::WAKED as u8 {
-            waker.set_state(WakerState::INIT);
+            waker.set_state(WakerState::WAITING);
         } else {
             // Might be WAITING
             return Err(state);

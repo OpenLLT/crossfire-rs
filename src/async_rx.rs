@@ -199,7 +199,7 @@ impl<T> AsyncRx<T> {
                     }
                     _waker = waker;
                 } else {
-                    let waker = RecvWaker::new_async(ctx, ());
+                    let waker = RecvWaker::new_async(ctx);
                     o_waker.replace(waker);
                     _waker = o_waker.as_ref().unwrap();
                 }

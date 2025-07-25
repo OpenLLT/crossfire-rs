@@ -140,7 +140,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             return Err(TrySendError::Disconnected(item));
         }
         let _item = MaybeUninit::new(item);
-        if self.shared.try_send(&_item) {
+        if self.shared.send(&_item) {
             self.shared.on_send();
             return Ok(());
         } else {
@@ -214,7 +214,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 if state >= WakerState::DONE as u8 {
                     return process_state!(state);
                 } else if state == WakerState::WAKED as u8 {
-                    if shared.try_send(item) {
+                    if shared.send(item) {
                         let _ = o_waker.take();
                         shared.on_send();
                         return Poll::Ready(Ok(()));
@@ -237,11 +237,11 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 }
                 _waker = waker;
             } else {
-                if shared.try_send(item) {
+                if shared.send(item) {
                     shared.on_send();
                     return Poll::Ready(Ok(()));
                 }
-                o_waker.replace(SendWaker::new_async(ctx, item.as_mut_ptr()));
+                o_waker.replace(SendWaker::new_async(ctx));
                 _waker = o_waker.as_ref().unwrap();
             }
             if let Err(state) = shared.reg_send_async(_waker) {
@@ -252,7 +252,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             }
             let config = BackoffConfig { spin_limit: 7, limit: self._detect_runtime() };
             let mut backoff = Backoff::new(config);
-            state = shared.sender_try_again_blocking(item, _waker, true, &mut backoff);
+            state = shared.sender_try_again_blocking(item, _waker, &mut backoff);
             if state == WakerState::WAITING as u8 {
                 return Poll::Pending;
             } else if state > WakerState::WAKED as u8 {

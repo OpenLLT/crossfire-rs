@@ -79,7 +79,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
     fn _try_send(shared: &ChannelShared<T>, item: T) -> Result<(), T> {
         let _item = MaybeUninit::new(item);
-        if shared.try_send(&_item) {
+        if shared.send(&_item) {
             shared.on_send();
             return Ok(());
         } else {
@@ -101,13 +101,29 @@ impl<T: Send + 'static> Tx<T> {
             } else {
                 let mut _item = MaybeUninit::new(item);
                 if fastpath {
-                    if shared.try_send(&_item) {
+                    if shared.send(&_item) {
                         shared.on_send();
                         return Ok(());
                     }
                 }
-                let waker = self.waker_cache.new_blocking(_item.as_mut_ptr());
+                let waker = self.waker_cache.new_blocking();
                 debug_assert!(waker.is_waked());
+
+                macro_rules! return_ok {
+                    ($waker: expr) => {
+                        self.waker_cache.push($waker);
+                        if !fastpath {
+                            if !self.senders.is_empty() {
+                                // It's for 8x1, 16x1.
+                                if self.is_full() {
+                                    std::thread::yield_now();
+                                }
+                            }
+                        }
+                        return Ok(())
+                    };
+                }
+
                 let mut state;
                 let backoff_conf = shared.get_backoff_tx();
                 let mut backoff = Backoff::new(backoff_conf);
@@ -117,13 +133,8 @@ impl<T: Send + 'static> Tx<T> {
                 loop {
                     match shared.reg_send_blocking(&waker) {
                         Ok(()) => {
-                            state = shared.sender_try_again_blocking(
-                                &mut _item,
-                                &waker,
-                                fastpath,
-                                &mut backoff,
-                            );
-                            debug_assert!(state != WakerState::INIT as u8);
+                            state =
+                                shared.sender_try_again_blocking(&mut _item, &waker, &mut backoff);
                         }
                         Err(s) => {
                             state = s;
@@ -142,11 +153,9 @@ impl<T: Send + 'static> Tx<T> {
                                 state = shared.sender_try_again_blocking(
                                     &mut _item,
                                     &waker,
-                                    fastpath,
                                     &mut backoff,
                                 );
                             }
-                            debug_assert!(state != WakerState::INIT as u8);
                         } else {
                             if shared.abandon_send_waker(waker) {
                                 return Err(SendTimeoutError::Timeout(unsafe {
@@ -158,13 +167,11 @@ impl<T: Send + 'static> Tx<T> {
                         }
                     }
                     if state == WakerState::DONE as u8 {
-                        self.waker_cache.push(waker);
-                        return Ok(());
+                        return_ok!(waker);
                     } else if state == WakerState::WAKED as u8 {
-                        if shared.try_send(&_item) {
+                        if shared.send(&_item) {
                             shared.on_send();
-                            self.waker_cache.push(waker);
-                            return Ok(());
+                            return_ok!(waker);
                         }
                     } else if state == WakerState::CLOSED as u8 {
                         return Err(SendTimeoutError::Disconnected(unsafe {
