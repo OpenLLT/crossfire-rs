@@ -147,67 +147,114 @@ impl<T> ArrayQueue<T> {
         }
     }
 
-    pub unsafe fn push_with_ptr(&self, value: *const T) -> Result<(), ()> {
+    #[allow(dead_code)]
+    #[inline(always)]
+    /// This function is optimise for channel suspected to be full,
+    /// It's an equal replacement to is_full(), if not try only oneshot,
+    /// return Ok(true) when push ok, Ok(false) when channel is full.
+    /// None when uncertain (normally needs a loop)
+    pub unsafe fn try_push_oneshot(&self, value: *const T) -> Option<bool> {
+        // Use two SeqCst to compare tail & head, it's an equal replacement to is_full()
+        let tail = self.tail.load(Ordering::SeqCst);
+        macro_rules! check_full {
+            ($tail: expr) => {
+                let head = self.head.load(Ordering::SeqCst);
+                // If the head lags one lap behind the tail as well...
+                if head.wrapping_add(self.one_lap) == $tail {
+                    // ...then the queue is full.
+                    return Some(false);
+                }
+            };
+        }
+        check_full!(tail);
+        match self._try_push(tail, value) {
+            Ok(_) => return Some(true),
+            Err((_stamp, _new_tail)) => {
+                // after the first check_full with both loads are SeqCst, this is unlikely full, but also a hot path
+                return None;
+            }
+        }
+    }
+
+    /// return stamp, new_tail
+    #[inline]
+    fn _try_push(&self, tail: usize, value: *const T) -> Result<bool, (usize, Option<usize>)> {
+        let cap = self.capacity();
+        // Deconstruct the tail.
+        let index = tail & (self.one_lap - 1);
+        let lap = tail & !(self.one_lap - 1);
+
+        // Inspect the corresponding slot.
+        debug_assert!(index < self.buffer.len());
+        let slot = unsafe { self.buffer.get_unchecked(index) };
+        let stamp = slot.stamp.load(Ordering::Acquire);
+
+        // If the tail and the stamp match, we may attempt to push.
+        if tail == stamp {
+            let new_tail = if index + 1 < cap {
+                // Same lap, incremented index.
+                // Set to `{ lap: lap, index: index + 1 }`.
+                tail + 1
+            } else {
+                // One lap forward, index wraps around to zero.
+                // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
+                lap.wrapping_add(self.one_lap)
+            };
+            // Try moving the tail.
+            match self.tail.compare_exchange_weak(
+                tail,
+                new_tail,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    // Write the value into the slot and update the stamp.
+                    unsafe {
+                        let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
+                        item.write(ptr::read(value));
+                    }
+                    slot.stamp.store(tail + 1, Ordering::Release);
+                    return Ok(true);
+                }
+                Err(t) => {
+                    return Err((stamp, Some(t)));
+                }
+            }
+        } else {
+            return Err((stamp, None));
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn push_with_ptr(&self, value: *const T) -> bool {
         let backoff = Backoff::new();
         let mut tail = self.tail.load(Ordering::Relaxed);
-        let cap = self.capacity();
-
-        loop {
-            // Deconstruct the tail.
-            let index = tail & (self.one_lap - 1);
-            let lap = tail & !(self.one_lap - 1);
-
-            // Inspect the corresponding slot.
-            debug_assert!(index < self.buffer.len());
-            let slot = unsafe { self.buffer.get_unchecked(index) };
-            let stamp = slot.stamp.load(Ordering::Acquire);
-
-            // If the tail and the stamp match, we may attempt to push.
-            if tail == stamp {
-                let new_tail = if index + 1 < cap {
-                    // Same lap, incremented index.
-                    // Set to `{ lap: lap, index: index + 1 }`.
-                    tail + 1
-                } else {
-                    // One lap forward, index wraps around to zero.
-                    // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
-                    lap.wrapping_add(self.one_lap)
-                };
-                // Try moving the tail.
-                match self.tail.compare_exchange_weak(
-                    tail,
-                    new_tail,
-                    Ordering::SeqCst,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => {
-                        // Write the value into the slot and update the stamp.
-                        unsafe {
-                            let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
-                            item.write(ptr::read(value));
-                        }
-                        slot.stamp.store(tail + 1, Ordering::Release);
-                        return Ok(());
-                    }
-                    Err(t) => {
-                        tail = t;
-                        backoff.spin();
-                    }
-                }
-            } else if stamp.wrapping_add(self.one_lap) == tail + 1 {
+        macro_rules! check_full {
+            ($tail: expr) => {
                 atomic::fence(Ordering::SeqCst);
                 let head = self.head.load(Ordering::Relaxed);
                 // If the head lags one lap behind the tail as well...
-                if head.wrapping_add(self.one_lap) == tail {
+                if head.wrapping_add(self.one_lap) == $tail {
                     // ...then the queue is full.
-                    return Err(());
+                    return false;
                 }
-                backoff.spin();
-                tail = self.tail.load(Ordering::Relaxed);
-            } else {
-                // Snooze because we need to wait for the stamp to get updated.
-                backoff.snooze();
-                tail = self.tail.load(Ordering::Relaxed);
+            };
+        }
+        loop {
+            match self._try_push(tail, value) {
+                Ok(res) => return res,
+                Err((stamp, new_tail)) => {
+                    if let Some(_tail) = new_tail {
+                        tail = _tail;
+                        backoff.spin();
+                        continue;
+                    }
+                    if stamp.wrapping_add(self.one_lap) == tail + 1 {
+                        check_full!(tail);
+                    }
+                    backoff.snooze();
+                    tail = self.tail.load(Ordering::Relaxed);
+                }
             }
         }
     }
