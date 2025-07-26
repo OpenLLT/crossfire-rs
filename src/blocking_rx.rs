@@ -83,7 +83,7 @@ impl<T> Rx<T> {
     #[inline(always)]
     pub(crate) fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<T, RecvTimeoutError> {
         let shared = &self.shared;
-        if shared.bound_size == Some(0) {
+        if shared.is_zero() {
             todo!();
         } else {
             macro_rules! try_recv {
@@ -131,17 +131,19 @@ impl<T> Rx<T> {
                     }
                 }
                 while state == WakerState::WAITING as u8 {
-                    if let Ok(time_left) = check_timeout(deadline) {
-                        if let Some(dur) = time_left {
-                            std::thread::park_timeout(dur);
-                        } else {
+                    match check_timeout(deadline) {
+                        Ok(None) => {
                             std::thread::park();
                         }
-                        state = waker.get_state();
-                    } else {
-                        let _ = shared.abandon_recv_waker(waker);
-                        return Err(RecvTimeoutError::Timeout);
+                        Ok(Some(dur)) => {
+                            std::thread::park_timeout(dur);
+                        }
+                        Err(_) => {
+                            let _ = shared.abandon_recv_waker(waker);
+                            return Err(RecvTimeoutError::Timeout);
+                        }
                     }
+                    state = waker.get_state();
                 }
                 if state == WakerState::CLOSED as u8 {
                     break 'MAIN;
@@ -184,7 +186,7 @@ impl<T> Rx<T> {
     /// returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if self.shared.bound_size == Some(0) {
+        if self.shared.is_zero() {
             todo!();
         } else {
             if let Some(item) = self.shared.try_recv() {
