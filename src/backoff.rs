@@ -1,6 +1,7 @@
 const SPIN_LIMIT: u16 = 6;
 const DEFAULT_LIMIT: u16 = 6;
 const MAX_LIMIT: u16 = 10;
+use std::mem::transmute;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -19,14 +20,13 @@ impl Default for BackoffConfig {
 impl BackoffConfig {
     #[inline(always)]
     pub fn to_u32(&self) -> u32 {
-        return (self.spin_limit as u32) << 16 | self.limit as u32;
+        let i: &u32 = unsafe { transmute(self) };
+        return *i;
     }
 
     #[inline(always)]
     pub fn from_u32(config: u32) -> Self {
-        let limit = config as u16;
-        let spin_limit = (config >> 16) as u16;
-        Self { limit, spin_limit }
+        unsafe { transmute(config) }
     }
 
     #[inline(always)]
@@ -39,7 +39,7 @@ impl BackoffConfig {
 }
 
 pub struct Backoff {
-    step: u32,
+    step: u16,
     pub config: BackoffConfig,
 }
 
@@ -52,31 +52,31 @@ impl Backoff {
     #[allow(dead_code)]
     #[inline(always)]
     pub fn spin(&mut self) {
-        for _ in 0..1 << self.step.min(SPIN_LIMIT as u32) {
+        for _ in 0..1 << self.step {
             std::hint::spin_loop();
         }
-        if self.step < MAX_LIMIT as u32 {
+        if self.step < MAX_LIMIT {
             self.step += 1;
         }
     }
 
     #[inline(always)]
     pub fn snooze(&mut self) {
-        if self.step < self.config.spin_limit as u32 {
+        if self.step < self.config.spin_limit {
             for _ in 0..1 << self.step {
                 std::hint::spin_loop();
             }
         } else {
             std::thread::yield_now();
         }
-        if self.step < MAX_LIMIT as u32 {
+        if self.step < MAX_LIMIT {
             self.step += 1;
         }
     }
 
     #[inline(always)]
     pub fn is_completed(&self) -> bool {
-        self.step >= self.config.limit as u32
+        self.step >= self.config.limit
     }
 
     #[inline(always)]
@@ -101,5 +101,25 @@ mod tests {
         assert!(backoff.is_completed());
         println!("backoff size {}", size_of::<Backoff>());
         println!("BackoffConfig size {}", size_of::<BackoffConfig>());
+        assert_eq!(size_of::<BackoffConfig>(), size_of::<u32>());
+        let config = BackoffConfig { spin_limit: 6, limit: 7 };
+        let config_i = config.to_u32();
+        let _config = BackoffConfig::from_u32(config_i);
+        assert_eq!(config.spin_limit, _config.spin_limit);
+        assert_eq!(config.limit, _config.limit);
+
+        let mut backoff = Backoff::new(BackoffConfig { spin_limit: 2, limit: 4 });
+        assert_eq!(backoff.step, 0);
+        backoff.spin();
+        assert_eq!(backoff.step, 1);
+        backoff.snooze();
+        assert_eq!(backoff.step, 2);
+        backoff.snooze();
+        backoff.snooze();
+        backoff.snooze();
+        backoff.snooze();
+        assert_eq!(backoff.step, 6);
+        backoff.spin();
+        assert_eq!(backoff.step, 7);
     }
 }
