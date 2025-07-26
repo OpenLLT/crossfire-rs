@@ -131,17 +131,19 @@ impl<T> Rx<T> {
                     }
                 }
                 while state == WakerState::WAITING as u8 {
-                    if let Ok(time_left) = check_timeout(deadline) {
-                        if let Some(dur) = time_left {
-                            std::thread::park_timeout(dur);
-                        } else {
+                    match check_timeout(deadline) {
+                        Ok(None) => {
                             std::thread::park();
                         }
-                        state = waker.get_state();
-                    } else {
-                        let _ = shared.abandon_recv_waker(waker);
-                        return Err(RecvTimeoutError::Timeout);
+                        Ok(Some(dur)) => {
+                            std::thread::park_timeout(dur);
+                        }
+                        Err(_) => {
+                            let _ = shared.abandon_recv_waker(waker);
+                            return Err(RecvTimeoutError::Timeout);
+                        }
                     }
+                    state = waker.get_state();
                 }
                 if state == WakerState::CLOSED as u8 {
                     break 'MAIN;

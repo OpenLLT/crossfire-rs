@@ -93,11 +93,9 @@ impl<T: Send + 'static> Tx<T> {
                 return Ok(());
             }
             let mut o_waker: Option<SendWaker<T>> = None;
-
             let mut state;
             let backoff_conf = shared.get_backoff_tx();
             let mut backoff = Backoff::new(backoff_conf);
-            let senders_hint = shared.senders.is_empty();
             macro_rules! return_ok {
                 ($waker: expr) => {
                     if let Some(waker) = $waker.take() {
@@ -106,9 +104,9 @@ impl<T: Send + 'static> Tx<T> {
                     return_ok!();
                 };
                 () => {
-                    if senders_hint == false {
+                    if !shared.senders.is_empty() {
                         // It's for 8x1, 16x1.
-                        backoff.snooze();
+                        std::thread::yield_now();
                     }
                     return Ok(())
                 };
@@ -146,33 +144,32 @@ impl<T: Send + 'static> Tx<T> {
                 (state, o_waker) =
                     shared.sender_reg_and_try(&mut _item, waker, fastpath, &mut backoff);
                 while state == WakerState::WAITING as u8 {
-                    if let Ok(time_left) = check_timeout(deadline) {
-                        if let Some(dur) = time_left {
-                            std::thread::park_timeout(dur);
-                        } else {
+                    match check_timeout(deadline) {
+                        Ok(None) => {
                             std::thread::park();
                         }
-                        state = o_waker.as_ref().unwrap().get_state();
-                    } else {
-                        if shared.abandon_send_waker(o_waker.take().unwrap()) {
-                            return Err(SendTimeoutError::Timeout(unsafe {
-                                _item.assume_init_read()
-                            }));
-                        } else {
-                            return Ok(());
+                        Ok(Some(dur)) => {
+                            std::thread::park_timeout(dur);
+                        }
+                        Err(_) => {
+                            if shared.abandon_send_waker(o_waker.take().unwrap()) {
+                                return Err(SendTimeoutError::Timeout(unsafe {
+                                    _item.assume_init_read()
+                                }));
+                            } else {
+                                // state is WakerState::DONE
+                                return Ok(());
+                            }
                         }
                     }
+                    state = o_waker.as_ref().unwrap().get_state();
                 }
                 if state == WakerState::DONE as u8 {
                     return_ok!(o_waker);
                 } else if state == WakerState::WAKED as u8 {
                     backoff.reset();
-                    if shared.send(&_item) {
-                        shared.on_send();
-                        return_ok!(o_waker);
-                    }
                     while !backoff.is_completed() {
-                        if shared.try_send_oneshot(&_item) == Some(true) {
+                        if shared.send(&_item) {
                             shared.on_send();
                             return_ok!(o_waker);
                         }
