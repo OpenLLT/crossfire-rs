@@ -28,6 +28,8 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     pub fn new_array(bound: usize) -> Self {
+        assert!(bound <= u32::MAX as usize);
+        assert!(bound > 0);
         Self::Array(ArrayQueue::new(bound))
     }
 
@@ -71,7 +73,7 @@ pub struct ChannelShared<T> {
     inner: Channel<T>,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
-    pub(crate) bound_size: Option<usize>,
+    bound_size: Option<u32>,
     backoff_tx: AtomicU32,
     backoff_rx: AtomicU32,
     pub(crate) tx_control: AtomicBool,
@@ -88,7 +90,7 @@ impl<T> ChannelShared<T> {
             rx_count: AtomicUsize::new(1),
             senders,
             recvs,
-            bound_size: inner.get_bound(),
+            bound_size: if let Some(bound) = inner.get_bound() { Some(bound as u32) } else { None },
             inner,
             backoff_tx: AtomicU32::new(BackoffConfig::default().to_u32()),
             backoff_rx: AtomicU32::new(BackoffConfig::default().to_u32()),
@@ -107,6 +109,11 @@ impl<T> ChannelShared<T> {
                 return inner.pop();
             }
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_zero(&self) -> bool {
+        self.bound_size == Some(0)
     }
 
     /// The number of messages in the channel at the moment.
