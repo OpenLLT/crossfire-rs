@@ -31,13 +31,13 @@
 //! Source:
 //!   - <http://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue>
 
+use crate::collections::RefType;
 use core::cell::UnsafeCell;
 use core::fmt;
 use core::mem::{self, MaybeUninit};
 use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr;
 use core::sync::atomic::{self, AtomicUsize, Ordering};
-
 use crossbeam_utils::{Backoff, CachePadded};
 
 /// A slot in a queue.
@@ -152,7 +152,7 @@ impl<T> ArrayQueue<T> {
     /// This function is optimise for channel suspected to be full,
     /// Try only oneshot, return Ok(true) when push ok, Ok(false) when channel is full.
     /// None when uncertain (normally needs a loop)
-    pub unsafe fn try_push_oneshot(&self, value: *const T) -> Option<bool> {
+    pub unsafe fn try_push_oneshot<P: RefType<T>>(&self, value: P) -> Option<bool> {
         let tail = self.tail.load(Ordering::Acquire);
         macro_rules! check_full {
             ($tail: expr, $order: expr) => {
@@ -166,7 +166,7 @@ impl<T> ArrayQueue<T> {
             };
         }
         check_full!(tail, 1);
-        match self._try_push(tail, value) {
+        match self._try_push(tail, &value) {
             Ok(_) => return Some(true),
             Err((_stamp, new_tail)) => {
                 if let Some(_tail) = new_tail {
@@ -181,7 +181,9 @@ impl<T> ArrayQueue<T> {
 
     /// return stamp, new_tail
     #[inline]
-    fn _try_push(&self, tail: usize, value: *const T) -> Result<bool, (usize, Option<usize>)> {
+    fn _try_push<P: RefType<T>>(
+        &self, tail: usize, value: &P,
+    ) -> Result<bool, (usize, Option<usize>)> {
         let cap = self.capacity();
         // Deconstruct the tail.
         let index = tail & (self.one_lap - 1);
@@ -214,7 +216,7 @@ impl<T> ArrayQueue<T> {
                     // Write the value into the slot and update the stamp.
                     unsafe {
                         let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
-                        item.write(ptr::read(value));
+                        item.write(value.read());
                     }
                     slot.stamp.store(tail + 1, Ordering::Release);
                     return Ok(true);
@@ -229,7 +231,7 @@ impl<T> ArrayQueue<T> {
     }
 
     #[inline(always)]
-    pub unsafe fn push_with_ptr(&self, value: *const T) -> bool {
+    pub unsafe fn push_with_ptr<P: RefType<T>>(&self, value: P) -> bool {
         let backoff = Backoff::new();
         let mut tail = self.tail.load(Ordering::Relaxed);
         macro_rules! check_full {
@@ -244,7 +246,7 @@ impl<T> ArrayQueue<T> {
             };
         }
         loop {
-            match self._try_push(tail, value) {
+            match self._try_push(tail, &value) {
                 Ok(res) => return res,
                 Err((stamp, new_tail)) => {
                     if let Some(_tail) = new_tail {

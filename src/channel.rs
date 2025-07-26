@@ -1,5 +1,6 @@
 pub use super::waker_registry::*;
 use crate::backoff::*;
+use crate::collections::{MaybeUninitRef, PtrRef};
 use crate::crossbeam::array_queue::ArrayQueue;
 pub use crate::crossbeam::err::*;
 pub use crate::locked_waker::*;
@@ -229,7 +230,7 @@ impl<T> ChannelShared<T> {
     pub(crate) fn send(&self, item: &MaybeUninit<T>) -> bool {
         match &self.inner {
             Channel::Array(inner) => {
-                return unsafe { inner.push_with_ptr(item.as_ptr()) };
+                return unsafe { inner.push_with_ptr(MaybeUninitRef(item)) };
             }
             Channel::List(inner) => {
                 inner.push(unsafe { item.assume_init_read() });
@@ -242,7 +243,7 @@ impl<T> ChannelShared<T> {
     pub(crate) fn try_send_oneshot(&self, item: &MaybeUninit<T>) -> Option<bool> {
         match &self.inner {
             Channel::Array(inner) => {
-                return unsafe { inner.try_push_oneshot(item.as_ptr()) };
+                return unsafe { inner.try_push_oneshot(MaybeUninitRef(item)) };
             }
             Channel::List(_inner) => {
                 unreachable!();
@@ -347,7 +348,7 @@ impl<T> ChannelShared<T> {
                 return self.is_full();
             }
             if let Channel::Array(inner) = &self.inner {
-                if unsafe { inner.push_with_ptr(p) } {
+                if unsafe { inner.push_with_ptr(PtrRef(p)) } {
                     waker.set_state(WakerState::DONE);
                     waker._wake_nolock();
                     drop(_guard);

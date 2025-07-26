@@ -4,6 +4,28 @@ use std::sync::{
     Arc, Weak,
 };
 
+pub trait RefType<T> {
+    fn read(&self) -> T;
+}
+
+pub struct MaybeUninitRef<'a, T>(pub &'a std::mem::MaybeUninit<T>);
+
+impl<'a, T> RefType<T> for MaybeUninitRef<'a, T> {
+    #[inline(always)]
+    fn read(&self) -> T {
+        unsafe { self.0.assume_init_read() }
+    }
+}
+
+pub struct PtrRef<T>(pub *const T);
+
+impl<T> RefType<T> for PtrRef<T> {
+    #[inline(always)]
+    fn read(&self) -> T {
+        unsafe { std::ptr::read(self.0) }
+    }
+}
+
 pub struct ArcCell<T> {
     ptr: AtomicPtr<T>,
 }
