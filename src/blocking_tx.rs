@@ -94,14 +94,18 @@ impl<T: Send + 'static> Tx<T> {
             }
             let mut o_waker: Option<SendWaker<T>> = None;
             let mut state: u8;
-            let mut backoff = Backoff::new(BackoffConfig::default().spin(1));
-            let fastpath = shared.senders.is_empty();
+            let mut backoff = Backoff::new(BackoffConfig::default().spin(2));
+            let fastpath = shared.senders.not_congest();
             macro_rules! return_ok {
                 ($waker: expr) => {
                     if let Some(waker) = $waker.take() {
                         self.waker_cache.push(waker);
                     }
-                    return_ok!();
+                    if shared.is_full() {
+                        // It's for 8x1, 16x1.
+                        std::thread::yield_now();
+                    }
+                    return Ok(())
                 };
                 () => {
                     if !fastpath {
@@ -140,9 +144,11 @@ impl<T: Send + 'static> Tx<T> {
                     debug_assert!(w.is_waked());
                     w
                 };
+                // For nx1 (more likely congest), need to reset backoff
+                // to allow more yield to receivers.
+                // For nxn (the backoff is already complete), wait a little bit.
                 backoff.reset();
-                (state, o_waker) =
-                    shared.sender_reg_and_try(&mut _item, waker, fastpath, &mut backoff);
+                (state, o_waker) = shared.sender_reg_and_try(&mut _item, waker, &mut backoff);
                 while state == WakerState::WAITING as u8 {
                     match check_timeout(deadline) {
                         Ok(None) => {
@@ -169,10 +175,13 @@ impl<T: Send + 'static> Tx<T> {
                     return_ok!(o_waker);
                 } else if state == WakerState::WAKED as u8 {
                     backoff.reset();
-                    while !backoff.is_completed() {
+                    loop {
                         if shared.send(&_item) {
                             shared.on_send();
                             return_ok!(o_waker);
+                        }
+                        if backoff.is_completed() {
+                            break;
                         }
                         backoff.snooze();
                     }

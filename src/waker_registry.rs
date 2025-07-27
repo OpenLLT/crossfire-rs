@@ -15,10 +15,9 @@ pub enum RegistrySender<T> {
 
 impl<T> RegistrySender<T> {
     #[inline(always)]
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
+    pub fn not_congest(&self) -> bool {
         match self {
-            RegistrySender::Single(inner) => inner.is_empty(),
+            RegistrySender::Single(_) => true,
             RegistrySender::Multi(inner) => inner.is_empty(),
             RegistrySender::Dummy(_) => true,
         }
@@ -148,6 +147,7 @@ impl<W: WakerTrait> RegistrySingle<W> {
         Self { cell: WeakCell::new() }
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     fn is_empty(&self) -> bool {
         !self.cell.exists()

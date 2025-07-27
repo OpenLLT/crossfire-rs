@@ -244,7 +244,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             let config = BackoffConfig::default().async_limit(self._detect_runtime());
             let mut backoff = Backoff::new(config);
             let waker = if let Some(w) = o_waker.take() { w } else { SendWaker::new_async(ctx) };
-            (state, _waker) = shared.sender_reg_and_try(item, waker, true, &mut backoff);
+            (state, _waker) = shared.sender_reg_and_try(item, waker, &mut backoff);
             *o_waker = _waker;
             if state == WakerState::WAITING as u8 {
                 return Poll::Pending;

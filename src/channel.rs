@@ -259,8 +259,7 @@ impl<T> ChannelShared<T> {
     /// when need_wake == false, will always return Some(state).
     #[inline]
     pub(crate) fn sender_reg_and_try(
-        &self, item: &mut MaybeUninit<T>, waker: SendWaker<T>, fastpath: bool,
-        backoff: &mut Backoff,
+        &self, item: &mut MaybeUninit<T>, waker: SendWaker<T>, backoff: &mut Backoff,
     ) -> (u8, Option<SendWaker<T>>) {
         self.senders.reg_waker(&waker);
         let mut state: u8;
@@ -283,14 +282,12 @@ impl<T> ChannelShared<T> {
             // other's changing, omit close check and return
             return (waker.cancel(), None);
         }
-        if !fastpath {
-            while state <= WakerState::WAKED as u8 {
-                if backoff.is_completed() {
-                    break;
-                }
-                backoff.yield_now();
-                state = waker.get_state();
+        while state < WakerState::WAKED as u8 {
+            if backoff.is_completed() {
+                break;
             }
+            backoff.yield_now();
+            state = waker.get_state();
         }
         return (state, Some(waker));
     }
