@@ -1,7 +1,26 @@
+use core::num::NonZero;
+use std::mem::transmute;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread;
+
 const SPIN_LIMIT: u16 = 6;
 const DEFAULT_LIMIT: u16 = 6;
 const MAX_LIMIT: u16 = 10;
-use std::mem::transmute;
+
+static DEFAULT_CONFIG: AtomicU32 =
+    AtomicU32::new(BackoffConfig { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT }.to_u32());
+
+#[inline(always)]
+pub fn detect_default_backoff() {
+    if thread::available_parallelism().unwrap_or(NonZero::new(1).unwrap())
+        == NonZero::new(1).unwrap()
+    {
+        DEFAULT_CONFIG.store(
+            BackoffConfig { spin_limit: 0, limit: DEFAULT_LIMIT }.to_u32(),
+            Ordering::Release,
+        );
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -13,28 +32,46 @@ pub struct BackoffConfig {
 impl Default for BackoffConfig {
     #[inline(always)]
     fn default() -> Self {
-        Self { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT }
+        Self::from_u32(DEFAULT_CONFIG.load(Ordering::Relaxed))
     }
 }
 
 impl BackoffConfig {
     #[inline(always)]
-    pub fn to_u32(&self) -> u32 {
-        let i: &u32 = unsafe { transmute(self) };
-        return *i;
+    pub const fn to_u32(self) -> u32 {
+        let i: u32 = unsafe { transmute(self) };
+        return i;
     }
 
     #[inline(always)]
-    pub fn from_u32(config: u32) -> Self {
+    pub const fn from_u32(config: u32) -> Self {
         unsafe { transmute(config) }
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
-    pub fn set_async_limit(&mut self, limit: u16) {
+    pub const fn async_limit(mut self, limit: u16) -> Self {
         if limit < self.limit {
             self.limit = limit;
         }
         self.spin_limit = limit;
+        self
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub const fn limit(mut self, limit: u16) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub const fn spin(mut self, spin_limit: u16) -> Self {
+        if spin_limit < self.spin_limit {
+            self.spin_limit = spin_limit;
+        }
+        self
     }
 }
 
@@ -69,6 +106,13 @@ impl Backoff {
         } else {
             std::thread::yield_now();
         }
+        if self.step < MAX_LIMIT {
+            self.step += 1;
+        }
+    }
+
+    pub fn yield_now(&mut self) {
+        std::thread::yield_now();
         if self.step < MAX_LIMIT {
             self.step += 1;
         }
