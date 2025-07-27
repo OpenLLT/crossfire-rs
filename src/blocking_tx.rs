@@ -78,7 +78,7 @@ impl<T> From<AsyncTx<T>> for Tx<T> {
 impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
     pub(crate) fn _send_blocking(
-        &self, item: T, fastpath: bool, deadline: Option<Instant>,
+        &self, item: T, deadline: Option<Instant>,
     ) -> Result<(), SendTimeoutError<T>> {
         let shared = &self.shared;
         if shared.is_disconnected() {
@@ -93,9 +93,9 @@ impl<T: Send + 'static> Tx<T> {
                 return Ok(());
             }
             let mut o_waker: Option<SendWaker<T>> = None;
-            let mut state;
-            let backoff_conf = shared.get_backoff_tx();
-            let mut backoff = Backoff::new(backoff_conf);
+            let mut state: u8;
+            let mut backoff = Backoff::new(BackoffConfig::default().spin(1));
+            let fastpath = shared.senders.is_empty();
             macro_rules! return_ok {
                 ($waker: expr) => {
                     if let Some(waker) = $waker.take() {
@@ -104,7 +104,7 @@ impl<T: Send + 'static> Tx<T> {
                     return_ok!();
                 };
                 () => {
-                    if !shared.senders.is_empty() {
+                    if !fastpath {
                         // It's for 8x1, 16x1.
                         std::thread::yield_now();
                     }
@@ -121,7 +121,7 @@ impl<T: Send + 'static> Tx<T> {
                 }
             } else {
                 while !backoff.is_completed() {
-                    backoff.snooze();
+                    backoff.yield_now();
                     match shared.try_send_oneshot(&_item) {
                         Some(true) => {
                             shared.on_send();
@@ -133,7 +133,6 @@ impl<T: Send + 'static> Tx<T> {
                 }
             }
             loop {
-                backoff.reset();
                 let waker = if let Some(w) = o_waker.take() {
                     w
                 } else {
@@ -141,6 +140,7 @@ impl<T: Send + 'static> Tx<T> {
                     debug_assert!(w.is_waked());
                     w
                 };
+                backoff.reset();
                 (state, o_waker) =
                     shared.sender_reg_and_try(&mut _item, waker, fastpath, &mut backoff);
                 while state == WakerState::WAITING as u8 {
@@ -164,6 +164,7 @@ impl<T: Send + 'static> Tx<T> {
                     }
                     state = o_waker.as_ref().unwrap().get_state();
                 }
+                backoff.reset();
                 if state == WakerState::DONE as u8 {
                     return_ok!(o_waker);
                 } else if state == WakerState::WAKED as u8 {
@@ -192,7 +193,7 @@ impl<T: Send + 'static> Tx<T> {
     ///
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        match self._send_blocking(item, true, None) {
+        match self._send_blocking(item, None) {
             Ok(_) => return Ok(()),
             Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
             Err(SendTimeoutError::Timeout(_)) => unreachable!(),
@@ -237,7 +238,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline]
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
         match Instant::now().checked_add(timeout) {
-            Some(deadline) => self._send_blocking(item, true, Some(deadline)),
+            Some(deadline) => self._send_blocking(item, Some(deadline)),
             None => self.try_send(item).map_err(|e| match e {
                 TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
                 TrySendError::Full(t) => SendTimeoutError::Timeout(t),

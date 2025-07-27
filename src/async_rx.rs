@@ -1,4 +1,4 @@
-use crate::backoff::Backoff;
+use crate::backoff::*;
 use crate::stream::AsyncStream;
 use crate::{channel::*, MRx, Rx};
 use std::cell::Cell;
@@ -178,8 +178,7 @@ impl<T> AsyncRx<T> {
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         let shared = &self.shared;
-        let mut config = shared.get_backoff_rx();
-        config.set_async_limit(self._detect_runtime());
+        let config = BackoffConfig::default().async_limit(self._detect_runtime());
         let mut backoff = Backoff::new(config);
         loop {
             if let Some(item) = shared.try_recv() {

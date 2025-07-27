@@ -241,7 +241,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     return Poll::Ready(Ok(()));
                 }
             }
-            let config = BackoffConfig { spin_limit: 7, limit: self._detect_runtime() };
+            let config = BackoffConfig::default().async_limit(self._detect_runtime());
             let mut backoff = Backoff::new(config);
             let waker = if let Some(w) = o_waker.take() { w } else { SendWaker::new_async(ctx) };
             (state, _waker) = shared.sender_reg_and_try(item, waker, true, &mut backoff);

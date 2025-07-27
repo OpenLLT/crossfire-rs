@@ -1,4 +1,4 @@
-use crate::backoff::Backoff;
+use crate::backoff::*;
 use crate::{channel::*, AsyncRx, MAsyncRx};
 use std::cell::Cell;
 use std::fmt;
@@ -103,7 +103,7 @@ impl<T> Rx<T> {
                 };
             }
             try_recv!();
-            let mut backoff = Backoff::new(shared.get_backoff_rx());
+            let mut backoff = Backoff::new(BackoffConfig::default());
             loop {
                 backoff.snooze();
                 try_recv!();
