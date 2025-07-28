@@ -209,6 +209,7 @@ extern crate futures;
 
 mod channel;
 pub use channel::ChannelShared;
+mod spinlock;
 
 mod backoff;
 pub use backoff::detect_backoff_cfg;
