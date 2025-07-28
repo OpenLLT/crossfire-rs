@@ -213,7 +213,12 @@ impl<W: WakerTrait> RegistryMulti<W> {
     }
 
     #[inline(always)]
-    fn push(&self, waker: &W) {
+    fn is_empty(&self) -> bool {
+        self.is_empty.load(Ordering::Relaxed)
+    }
+
+    #[inline(always)]
+    fn reg_waker(&self, waker: &W) {
         let weak = waker.weak();
         let mut guard = self.inner.lock();
         let seq = guard.seq.wrapping_add(1);
@@ -221,20 +226,8 @@ impl<W: WakerTrait> RegistryMulti<W> {
         waker.set_seq(seq);
         if guard.queue.is_empty() {
             self.is_empty.store(false, Ordering::Release);
-            guard.queue.push_back(weak);
-        } else {
-            guard.queue.push_back(weak);
         }
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        self.is_empty.load(Ordering::Relaxed)
-    }
-
-    #[inline(always)]
-    fn reg_waker(&self, waker: &W) {
-        self.push(&waker);
+        guard.queue.push_back(weak);
     }
 
     /// Call when ReceiveFuture is cancelled.
@@ -245,15 +238,11 @@ impl<W: WakerTrait> RegistryMulti<W> {
             // Other thread is cleaning
             return;
         }
-        let mut guard = self.inner.lock();
-        while let Some(weak) = guard.queue.pop_front() {
-            if W::try_to_clear(weak, seq) {
+        while let Some(w) = self.pop() {
+            if w.try_to_clear(seq) {
                 // we do not known push back may have concurrent problem
                 break;
             }
-        }
-        if guard.queue.is_empty() {
-            self.is_empty.store(true, Ordering::Release);
         }
         self.checking.store(false, Ordering::Release);
     }
@@ -264,16 +253,21 @@ impl<W: WakerTrait> RegistryMulti<W> {
             return None;
         }
         let mut guard = self.inner.lock();
-        while let Some(weak) = guard.queue.pop_front() {
-            if guard.queue.is_empty() {
-                self.is_empty.store(true, Ordering::Release);
-            }
-            if let Some(waker) = weak.upgrade() {
-                return Some(W::from_arc(waker));
+        let mut waker: Option<W> = None;
+        loop {
+            if let Some(weak) = guard.queue.pop_front() {
+                if let Some(_waker) = weak.upgrade() {
+                    waker = Some(W::from_arc(_waker));
+                    break;
+                }
+            } else {
+                break;
             }
         }
-        self.is_empty.store(true, Ordering::Release);
-        return None;
+        if guard.queue.is_empty() {
+            self.is_empty.store(true, Ordering::Release);
+        }
+        return waker;
     }
 
     /// return waker queue size

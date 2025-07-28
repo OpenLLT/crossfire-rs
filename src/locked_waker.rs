@@ -45,7 +45,7 @@ pub trait WakerTrait: Deref<Target = Self::Inner> {
     fn weak(&self) -> Weak<Self::Inner>;
 
     /// return true to stop; return false to continue the search.
-    fn try_to_clear(weak: Weak<Self::Inner>, seq: usize) -> bool;
+    fn try_to_clear(&self, seq: usize) -> bool;
 }
 
 pub struct SendWaker<T>(Arc<WakerInner<AtomicPtr<T>>>);
@@ -146,17 +146,8 @@ impl<T> WakerTrait for SendWaker<T> {
 
     /// return true to stop; return false to continue the search.
     #[inline(always)]
-    fn try_to_clear(weak: Weak<Self::Inner>, seq: usize) -> bool {
-        if let Some(inner) = weak.upgrade() {
-            let _seq = inner.seq.load(Ordering::Acquire);
-            if _seq == seq {
-                // It's my waker, stopped
-                return true;
-            }
-            let _ = inner.wake_simple();
-            return _seq > seq;
-        }
-        return false;
+    fn try_to_clear(&self, seq: usize) -> bool {
+        self.0.try_to_clear(seq)
     }
 }
 
@@ -247,17 +238,8 @@ impl WakerTrait for RecvWaker {
 
     /// return true to stop; return false to continue the search.
     #[inline(always)]
-    fn try_to_clear(weak: Weak<Self::Inner>, seq: usize) -> bool {
-        if let Some(inner) = weak.upgrade() {
-            let _seq = inner.seq.load(Ordering::Acquire);
-            if _seq == seq {
-                // It's my waker, stopped
-                return true;
-            }
-            let _ = inner.wake_simple();
-            return _seq > seq;
-        }
-        return false;
+    fn try_to_clear(&self, seq: usize) -> bool {
+        self.0.try_to_clear(seq)
     }
 }
 
@@ -300,6 +282,18 @@ impl<P> WakerInner<P> {
     fn update_thread_handle(&self) {
         let _waker = self.get_waker_mut();
         *_waker = WakerType::Blocking(thread::current());
+    }
+
+    /// return true to stop; return false to continue the search.
+    #[inline(always)]
+    fn try_to_clear(&self, seq: usize) -> bool {
+        let _seq = self.seq.load(Ordering::Acquire);
+        if _seq == seq {
+            // It's my waker, stopped
+            return true;
+        }
+        let _ = self.wake_simple();
+        return _seq > seq;
     }
 
     #[inline(always)]
