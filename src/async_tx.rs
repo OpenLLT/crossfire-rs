@@ -211,17 +211,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         loop {
             if let Some(waker) = o_waker.as_ref() {
                 state = waker.get_state();
-                if state >= WakerState::DONE as u8 {
-                    return process_state!(state);
-                } else if state == WakerState::WAKED as u8 {
-                    if shared.send(item) {
-                        let _ = o_waker.take();
-                        shared.on_send();
-                        return Poll::Ready(Ok(()));
-                    }
-                    waker._check_waker_nolock(ctx);
-                } else {
-                    debug_assert_eq!(state, WakerState::WAITING as u8);
+                if state == WakerState::WAITING as u8 {
                     // Spurious waked by runtime, or
                     // Normally only selection or multiplex future will get here.
                     // No need to reg again, since waker is not consumed.
@@ -230,11 +220,18 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     if state == WakerState::WAITING as u8 {
                         return Poll::Pending;
                     }
-                    if state > WakerState::WAKED as u8 {
-                        return process_state!(state);
-                    }
-                    // register again
                 }
+                if state > WakerState::WAKED as u8 {
+                    return process_state!(state);
+                } else {
+                    debug_assert_eq!(state, WakerState::WAKED as u8);
+                    if shared.send(item) {
+                        let _ = o_waker.take();
+                        shared.on_send();
+                        return Poll::Ready(Ok(()));
+                    }
+                }
+                // register again
             } else {
                 if shared.send(item) {
                     shared.on_send();
@@ -243,7 +240,12 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             }
             let config = BackoffConfig::default().async_limit(self._detect_runtime());
             let mut backoff = Backoff::new(config);
-            let waker = if let Some(w) = o_waker.take() { w } else { SendWaker::new_async(ctx) };
+            let waker = if let Some(w) = o_waker.take() {
+                w._check_waker_nolock(ctx);
+                w
+            } else {
+                SendWaker::new_async(ctx)
+            };
             (state, _waker) = shared.sender_reg_and_try(item, waker, &mut backoff);
             *o_waker = _waker;
             if state == WakerState::WAITING as u8 {
