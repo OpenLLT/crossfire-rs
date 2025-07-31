@@ -1,6 +1,7 @@
 use crate::backoff::*;
 use crate::collections::ArcCell;
 use std::cell::UnsafeCell;
+use std::fmt;
 use std::mem::transmute;
 use std::ops::Deref;
 use std::ptr;
@@ -49,6 +50,12 @@ pub trait WakerTrait: Deref<Target = Self::Inner> {
 }
 
 pub struct SendWaker<T>(Arc<WakerInner<AtomicPtr<T>>>);
+
+impl<T> fmt::Debug for SendWaker<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "waker({})", self.get_seq())
+    }
+}
 
 impl<T> SendWaker<T> {
     #[inline(always)]
@@ -152,6 +159,12 @@ impl<T> WakerTrait for SendWaker<T> {
 }
 
 pub struct RecvWaker(Arc<WakerInner<()>>);
+
+impl fmt::Debug for RecvWaker {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "waker({})", self.get_seq())
+    }
+}
 
 impl Deref for RecvWaker {
     type Target = WakerInner<()>;
