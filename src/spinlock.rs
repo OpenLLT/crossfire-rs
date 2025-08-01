@@ -36,7 +36,9 @@ impl<'a, T> AsRef<T> for SpinlockGuard<'a, T> {
 
 impl<'a, T> Drop for SpinlockGuard<'a, T> {
     fn drop(&mut self) {
-        self.lock.store(false, Ordering::Release);
+        // NOTE: use SeqCst to prevent atomic ordering (store) happens inside the guard scope.
+        // (issue #24)
+        self.lock.store(false, Ordering::SeqCst);
     }
 }
 
