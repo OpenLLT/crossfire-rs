@@ -79,6 +79,14 @@ pub enum RegistryRecv {
 }
 
 impl RegistryRecv {
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            RegistryRecv::Single(inner) => inner.is_empty(),
+            RegistryRecv::Multi(inner) => inner.is_empty(),
+        }
+    }
+
     #[inline(always)]
     pub fn reg_waker(&self, waker: &RecvWaker) -> Result<(), u8> {
         let state = waker.get_state();
@@ -277,7 +285,6 @@ impl<W: WakerTrait> RegistryMulti<W> {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
 
@@ -285,29 +292,34 @@ mod tests {
     use crate::locked_waker::RecvWaker;
     #[test]
     fn test_registry_multi() {
-        let reg = RegistryMulti::new();
+        let reg = RegistryRecv::Multi(RegistryMulti::new());
 
         // test push
         let waker1 = RecvWaker::new_blocking();
         assert_eq!(reg.is_empty(), true);
-        reg.reg_blocking(&waker1);
+        assert_eq!(waker1.get_state(), WakerState::WAKED as u8);
+        reg.reg_waker(&waker1).expect("reg");
+        assert_eq!(waker1.get_state(), WakerState::INIT as u8);
         assert!(waker1.get_seq() > 0);
         assert_eq!(reg.is_empty(), false);
         assert_eq!(reg.len(), 1);
         assert_eq!(waker1.is_waked(), false);
 
         let waker2 = RecvWaker::new_blocking();
-        reg.reg_blocking(&waker2);
+        reg.reg_waker(&waker2).expect("reg");
         assert_eq!(reg.len(), 2);
         assert_eq!(waker2.get_seq(), waker1.get_seq() + 1);
         assert_eq!(waker2.is_waked(), false);
 
-        // test fire
-        reg.fire();
+        if let Some(w) = reg.pop() {
+            assert!(w.wake_simple().is_ok());
+        }
         assert_eq!(waker1.is_waked(), true);
         assert_eq!(reg.len(), 1);
         assert_eq!(reg.is_empty(), false);
-        reg.fire();
+        if let Some(w) = reg.pop() {
+            assert!(w.wake_simple().is_ok());
+        }
         assert_eq!(waker2.is_waked(), true);
         assert_eq!(reg.len(), 0);
         assert_eq!(reg.is_empty(), true);
@@ -315,15 +327,16 @@ mod tests {
         // test seq
 
         let waker3 = RecvWaker::new_blocking();
-        reg.reg_blocking(&waker3);
+        reg.reg_waker(&waker3).expect("reg");
         let waker4 = RecvWaker::new_blocking();
-        reg.reg_blocking(&waker4);
+        reg.reg_waker(&waker4).expect("reg");
+        waker4.set_state(WakerState::WAITING);
         for _ in 0..10 {
             let _waker = RecvWaker::new_blocking();
-            reg.reg_blocking(&_waker);
+            reg.reg_waker(&_waker).expect("reg");
         }
         assert_eq!(reg.len(), 12);
-        assert_eq!(waker4.abandon(), false);
+        assert_eq!(waker4.abandon(), WakerState::CLOSED as u8);
         reg.clear_wakers(waker4.get_seq());
         assert_eq!(reg.len(), 10);
         assert!(waker3.is_waked());
@@ -331,8 +344,10 @@ mod tests {
 
         // test close
         assert_eq!(reg.is_empty(), false);
-        reg.close();
+        while let Some(waker) = reg.pop() {
+            waker.close_wake();
+        }
         assert_eq!(reg.len(), 0);
+        assert_eq!(reg.is_empty(), true);
     }
 }
-*/
