@@ -221,6 +221,8 @@ impl<T> ChannelShared<T> {
         }
     }
 
+    /// When waker exists and reused for async_tx, might need to check_waker every poll(),
+    /// in case of spurious waked up by runtime.
     #[inline]
     pub(crate) fn sender_try_again_async(
         &self, item: &mut MaybeUninit<T>, waker: &SendWaker<T>, ctx: &mut Context,
@@ -234,7 +236,8 @@ impl<T> ChannelShared<T> {
         loop {
             if let Some(guard) = waker.try_lock_weak() {
                 let state = waker.get_state();
-                if state >= WakerState::DONE as u8 {
+                if state >= WakerState::WAKED as u8 {
+                    // Return if WAKED, waker should re-register anyway
                     return state;
                 }
                 if self.send(item) {
