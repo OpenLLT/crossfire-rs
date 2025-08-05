@@ -383,13 +383,9 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn recv_waker_done(&self, waker: &RecvWaker) {
-        let state = waker.get_state();
-        if state <= WakerState::WAITING as u8 {
-            // including WakerState::INIT
-            waker.set_state(WakerState::DONE);
-            self.recvs.cancel_waker();
-        }
+    pub(crate) fn recv_waker_cancel(&self, waker: &RecvWaker) {
+        waker.set_state(WakerState::WAKED);
+        self.recvs.cancel_waker();
     }
 
     /// Call on cancellation, return true to indicate drop temporary message
@@ -465,7 +461,7 @@ impl<T> ChannelShared<T> {
             }
         }
         if self.bound_size > Some(0) && self.bound_size <= Some(2) {
-            return 5;
+            return 6;
         } else {
             return 1;
         }
