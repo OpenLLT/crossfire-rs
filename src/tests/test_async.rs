@@ -442,7 +442,7 @@ fn test_basic_unbounded_recv_timeout_async<T: BlockingTxTrait<i32>, R: AsyncRxTr
         let (tx, rx) = _channel;
         runtime_block_on!(async move {
             let th = async_spawn!(async move {
-                sleep(Duration::from_millis(2)).await;
+                sleep(Duration::from_millis(200)).await;
                 let _ = tx.send(1);
             });
             assert_eq!(
