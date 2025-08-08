@@ -253,6 +253,8 @@ impl<T> ChannelShared<T> {
                     // The waker could not be used anymore
                     match waker.try_change_state(WakerState::WAITING, WakerState::WAKED) {
                         Ok(_) => {
+                            // This is rare case for idle select with spurious wake
+                            self.senders.cancel_waker(&waker);
                             return (WakerState::WAKED as u8, None);
                         }
                         Err(state) => {
@@ -283,7 +285,7 @@ impl<T> ChannelShared<T> {
         if let Some(res) = self.try_send_oneshot(item) {
             if res {
                 waker.set_state(WakerState::DONE);
-                self.senders.cancel_waker();
+                self.senders.cancel_waker(&waker);
                 self.on_send();
                 return (WakerState::DONE as u8, Some(waker));
             } else {
@@ -299,6 +301,7 @@ impl<T> ChannelShared<T> {
             // Just flow away this waker, on_recv will try to wake INIT state.
             match waker.try_change_state(WakerState::WAITING, WakerState::WAKED) {
                 Ok(_) => {
+                    self.senders.cancel_waker(&waker);
                     // might be in queue, should not use again
                     return (WakerState::WAKED as u8, None);
                 }
@@ -384,8 +387,8 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     pub(crate) fn recv_waker_cancel(&self, waker: &RecvWaker) {
-        if waker.get_state() < WakerState::WAKED as u8 {
-            self.recvs.cancel_waker();
+        if waker.cancel() {
+            self.recvs.cancel_waker(&waker);
         }
     }
 
