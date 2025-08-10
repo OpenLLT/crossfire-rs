@@ -231,7 +231,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
         guard.seq = seq;
         waker.set_seq(seq);
         if guard.queue.is_empty() {
-            self.is_empty.store(false, Ordering::Release);
+            self.is_empty.store(false, Ordering::SeqCst);
         }
         guard.queue.push_back(weak);
     }
@@ -263,7 +263,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
 
     #[inline(always)]
     fn pop(&self) -> Option<W> {
-        if self.is_empty.load(Ordering::Acquire) {
+        if self.is_empty.load(Ordering::SeqCst) {
             return None;
         }
         let mut guard = self.inner.lock();
@@ -279,7 +279,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
             }
         }
         if guard.queue.is_empty() {
-            self.is_empty.store(true, Ordering::Release);
+            self.is_empty.store(true, Ordering::SeqCst);
         }
         return waker;
     }
