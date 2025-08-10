@@ -1,6 +1,7 @@
 use crate::collections::LockedQueue;
 use crate::locked_waker::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::Context;
 
 #[enum_dispatch(RegistryTrait)]
 pub enum Registry {
@@ -12,7 +13,10 @@ pub enum Registry {
 #[enum_dispatch]
 pub trait RegistryTrait {
     /// For async context
-    fn reg_waker(&self, waker: &LockedWaker);
+    fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool;
+
+    /// For thread context
+    fn reg_blocking(&self, _waker: &LockedWaker);
 
     fn clear_wakers(&self, _seq: u64);
 
@@ -38,7 +42,12 @@ impl RegistryDummy {
 
 impl RegistryTrait for RegistryDummy {
     #[inline(always)]
-    fn reg_waker(&self, _waker: &LockedWaker) {
+    fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool {
+        unreachable!();
+    }
+
+    #[inline(always)]
+    fn reg_blocking(&self, _waker: &LockedWaker) {
         unreachable!();
     }
 
@@ -75,14 +84,33 @@ impl RegistrySingle {
 impl RegistryTrait for RegistrySingle {
     /// return is_skip
     #[inline(always)]
-    fn reg_waker(&self, waker: &LockedWaker) {
+    fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
+        let waker = {
+            if o_waker.is_none() {
+                o_waker.replace(LockedWaker::new_async(ctx));
+                o_waker.as_ref().unwrap()
+            } else {
+                let _waker = o_waker.as_ref().unwrap();
+                if !_waker.is_waked() {
+                    // No need to reg again, since waker is not consumed
+                    return true;
+                }
+                _waker
+            }
+        };
+        self.cell.put(waker.weak());
+        false
+    }
+
+    #[inline(always)]
+    fn reg_blocking(&self, waker: &LockedWaker) {
         self.cell.put(waker.weak());
     }
 
     #[inline(always)]
     fn cancel_waker(&self, _waker: &LockedWaker) {
         // Got to be it, because only one single thread.
-        // It's ok to ignore it, next time will be overwritten.
+        self.cell.clear();
     }
 
     #[inline(always)]
@@ -93,11 +121,7 @@ impl RegistryTrait for RegistrySingle {
 
     #[inline(always)]
     fn fire(&self) {
-        if let Some(waker) = self.cell.pop() {
-            if waker.wake() {
-                return;
-            }
-        }
+        self.cell.wake();
     }
 
     #[inline(always)]
@@ -135,19 +159,36 @@ impl RegistryMulti {
 
 impl RegistryTrait for RegistryMulti {
     #[inline(always)]
-    fn reg_waker(&self, waker: &LockedWaker) {
-        let seq = self.seq.fetch_add(1, Ordering::Release);
-        waker.set_seq(seq);
+    fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
+        let waker = {
+            if o_waker.is_none() {
+                o_waker.replace(LockedWaker::new_async(ctx));
+                o_waker.as_ref().unwrap()
+            } else {
+                let _waker = o_waker.as_ref().unwrap();
+                if !_waker.is_waked() {
+                    // No need to reg again, since waker is not consumed
+                    return true;
+                }
+                _waker
+            }
+        };
+        waker.set_seq(self.seq.fetch_add(1, Ordering::SeqCst));
+        self.queue.push(waker.weak());
+        false
+    }
+
+    #[inline(always)]
+    fn reg_blocking(&self, waker: &LockedWaker) {
         self.queue.push(waker.weak());
     }
 
     #[inline(always)]
     fn cancel_waker(&self, waker: &LockedWaker) {
+        // Just abandon and leave it to fire() to clean it
         let seq = waker.get_seq();
         if let Some(waker_ref) = self.queue.pop() {
             waker_ref.try_to_clear(seq);
-            // Just abandon and leave it to fire() to clean it.
-            // At most try one.
         }
     }
 
