@@ -165,7 +165,7 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn close_tx(&self) {
         if self.tx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
-            self.closed.store(true, Ordering::Release);
+            self.closed.store(true, Ordering::SeqCst);
             self._close_all();
         }
     }
@@ -174,7 +174,7 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn close_rx(&self) {
         if self.rx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
-            self.closed.store(true, Ordering::Release);
+            self.closed.store(true, Ordering::SeqCst);
             self._close_all();
         }
     }
