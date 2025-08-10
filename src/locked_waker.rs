@@ -1,56 +1,43 @@
 use crate::collections::WeakCell;
 use std::fmt;
 use std::sync::{
-    atomic::{AtomicU64, AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Weak,
 };
 use std::task::*;
+use std::thread;
 
 /// Waker object used by [crate::AsyncTx::poll_send()] and [crate::AsyncRx::poll_item()]
 pub struct LockedWaker(Arc<LockedWakerInner>);
 
-impl fmt::Debug for LockedWaker {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let _self = self.0.as_ref();
-        write!(
-            f,
-            "LockedWaker(seq={}, state={})",
-            _self.seq.load(Ordering::Acquire),
-            _self.state.load(Ordering::Acquire)
-        )
-    }
-}
-
-#[repr(u8)]
-pub(crate) enum WakerState {
-    INIT = 0,
-    WAITING = 1,
-    WAKED = 2,
-}
-
-struct LockedWakerInner {
-    waker: std::task::Waker,
-    state: AtomicU8,
-    seq: AtomicU64,
-}
-
-pub struct LockedWakerRef(Weak<LockedWakerInner>);
-
-impl fmt::Debug for LockedWakerRef {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "LockedWakerRef")
-    }
-}
-
 impl LockedWaker {
     #[inline(always)]
-    pub(crate) fn new(ctx: &Context) -> Self {
-        let s = Arc::new(LockedWakerInner {
+    pub(crate) fn new_async(ctx: &Context) -> Self {
+        Self(Arc::new(LockedWakerInner {
             seq: AtomicU64::new(0),
-            waker: ctx.waker().clone(),
-            state: AtomicU8::new(WakerState::INIT as u8),
-        });
-        Self(s)
+            waked: AtomicBool::new(false),
+            waker: WakerType::Async(ctx.waker().clone()),
+        }))
+    }
+
+    #[inline(always)]
+    pub(crate) fn new_blocking() -> Self {
+        Self(Arc::new(LockedWakerInner {
+            seq: AtomicU64::new(0),
+            waked: AtomicBool::new(false),
+            waker: WakerType::Blocking(thread::current()),
+        }))
+    }
+
+    // return is_already waked
+    #[inline(always)]
+    pub(crate) fn abandon(&self) -> bool {
+        self.0.waked.swap(true, Ordering::SeqCst)
+    }
+
+    #[inline(always)]
+    pub(crate) fn cancel(&self) {
+        self.0.waked.store(true, Ordering::Release)
     }
 
     #[inline(always)]
@@ -64,61 +51,68 @@ impl LockedWaker {
     }
 
     #[inline(always)]
-    pub(crate) fn reset_init(&self) {
-        self.0.state.store(WakerState::INIT as u8, Ordering::SeqCst);
-    }
-
-    #[inline(always)]
-    pub(crate) fn commit(&self) -> bool {
-        // Content with wake() on the other-side
-        match self.0.state.compare_exchange(
-            WakerState::INIT as u8,
-            WakerState::WAITING as u8,
-            Ordering::SeqCst,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return true,
-            Err(_state) => return false,
-        }
-    }
-
-    // return is_already waked
-    #[inline(always)]
-    pub(crate) fn abandon(&self) -> u8 {
-        return self.0.state.swap(WakerState::WAKED as u8, Ordering::SeqCst);
-    }
-
-    #[inline(always)]
-    pub(crate) fn get_state(&self) -> u8 {
-        self.0.state.load(Ordering::SeqCst)
-    }
-
-    #[inline(always)]
-    pub(crate) fn will_wake(&self, ctx: &Context) -> bool {
-        self.0.waker.will_wake(ctx.waker())
+    pub(crate) fn is_waked(&self) -> bool {
+        self.0.waked.load(Ordering::Acquire)
     }
 
     #[inline(always)]
     pub(crate) fn weak(&self) -> LockedWakerRef {
+        self.0.waked.store(false, Ordering::Release);
         LockedWakerRef(Arc::downgrade(&self.0))
     }
 
     #[inline(always)]
-    pub(crate) fn is_waked(&self) -> bool {
-        self.0.state.load(Ordering::Acquire) == WakerState::WAKED as u8
+    pub(crate) fn wake(&self) -> bool {
+        self.0.wake()
     }
+}
 
+impl fmt::Debug for LockedWaker {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let _self = self.0.as_ref();
+        write!(
+            f,
+            "LockedWaker(seq={}, waked={})",
+            _self.seq.load(Ordering::Acquire),
+            _self.waked.load(Ordering::Acquire)
+        )
+    }
+}
+
+enum WakerType {
+    Async(Waker),
+    Blocking(thread::Thread),
+}
+
+struct LockedWakerInner {
+    waked: AtomicBool,
+    seq: AtomicU64,
+    waker: WakerType,
+}
+
+unsafe impl Send for LockedWakerInner {}
+unsafe impl Sync for LockedWakerInner {}
+
+pub struct LockedWakerRef(Weak<LockedWakerInner>);
+
+impl fmt::Debug for LockedWakerRef {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "LockedWakerRef")
+    }
+}
+
+impl LockedWakerInner {
     /// return true on suc wake up, false when already woken up.
     #[inline(always)]
-    pub(crate) fn wake(&self) -> bool {
-        let _self = self.0.as_ref();
-        let old_state = _self.state.swap(WakerState::WAKED as u8, Ordering::SeqCst);
-        // No matter the flag, call wake anyway
-        if old_state != WakerState::WAKED as u8 {
-            _self.waker.wake_by_ref();
+    pub fn wake(&self) -> bool {
+        if self.waked.swap(true, Ordering::SeqCst) {
+            return false;
         }
-        // NOTE: INIT is in between state
-        return old_state == WakerState::WAITING as u8;
+        match &self.waker {
+            WakerType::Async(waker) => waker.wake_by_ref(),
+            WakerType::Blocking(th) => th.unpark(),
+        }
+        true
     }
 }
 
@@ -134,8 +128,8 @@ impl LockedWakerRef {
 
     #[inline(always)]
     pub(crate) fn wake(&self) -> bool {
-        if let Some(_self) = self.0.upgrade() {
-            return LockedWaker(_self).wake();
+        if let Some(w) = self.0.upgrade() {
+            return w.wake();
         } else {
             return false;
         }
@@ -143,19 +137,13 @@ impl LockedWakerRef {
 
     /// return true to stop; return false to continue the search.
     pub(crate) fn try_to_clear(&self, seq: u64) -> bool {
-        if let Some(w) = self.0.upgrade() {
-            let waker = LockedWaker(w);
-            let _seq = waker.get_seq();
+        if let Some(waker) = self.0.upgrade() {
+            let _seq = waker.seq.load(Ordering::Acquire);
             if _seq == seq {
                 // It's my waker, stopped
                 return true;
             }
-            if !waker.is_waked() {
-                waker.wake();
-                // other future is before me, but not canceled, i should stop.
-                // we do not known push back may have concurrent problem
-                return true;
-            }
+            waker.wake();
             return _seq > seq;
         }
         return false;
@@ -181,11 +169,11 @@ impl WakerCell {
     }
 
     #[inline(always)]
-    pub fn pop(&self) -> Option<LockedWaker> {
+    pub fn wake(&self) -> bool {
         if let Some(waker) = self.0.pop() {
-            return Some(LockedWaker(waker));
+            return waker.wake();
         }
-        None
+        false
     }
 
     #[inline(always)]
