@@ -1157,3 +1157,90 @@ fn test_pressure_stream_multi_idle(
         }
     });
 }
+
+// This test make sure we have correctly use of maybeuninit
+#[logfn]
+#[rstest]
+#[case(spsc::bounded_async::<SmallMsg>(1))]
+#[case(spsc::bounded_async::<SmallMsg>(10))]
+#[case(mpsc::bounded_async::<SmallMsg>(1))]
+#[case(mpsc::bounded_async::<SmallMsg>(10))]
+#[case(mpmc::bounded_async::<SmallMsg>(1))]
+#[case(mpmc::bounded_async::<SmallMsg>(10))]
+fn test_drop_small_msg<T: AsyncTxTrait<SmallMsg>, R: AsyncRxTrait<SmallMsg>>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    println!("needs_drop {}", std::mem::needs_drop::<SmallMsg>());
+    _test_drop_msg(channel);
+}
+
+// This test make sure we have correctly use of maybeuninit
+#[logfn]
+#[rstest]
+#[case(spsc::bounded_async::<LargeMsg>(1))]
+#[case(spsc::bounded_async::<LargeMsg>(10))]
+#[case(mpsc::bounded_async::<LargeMsg>(1))]
+#[case(mpsc::bounded_async::<LargeMsg>(10))]
+#[case(mpmc::bounded_async::<LargeMsg>(1))]
+#[case(mpmc::bounded_async::<LargeMsg>(10))]
+fn test_drop_large_msg<T: AsyncTxTrait<LargeMsg>, R: AsyncRxTrait<LargeMsg>>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    println!("needs_drop {}", std::mem::needs_drop::<LargeMsg>());
+    _test_drop_msg(channel);
+}
+
+fn _test_drop_msg<M: TestDropMsg, T: AsyncTxTrait<M>, R: AsyncRxTrait<M>>(channel: (T, R)) {
+    let (tx, rx) = channel;
+    reset_drop_counter();
+    runtime_block_on!(async move {
+        let cap = tx.capacity().unwrap();
+        let mut ids = cap;
+        for i in 0..ids {
+            let msg = M::new(i);
+            assert!(tx.try_send(msg).is_ok());
+        }
+        assert_eq!(get_drop_counter(), 0);
+        let msg = M::new(ids);
+        if let Err(TrySendError::Full(_msg)) = tx.try_send(msg) {
+            assert_eq!(_msg.get_value(), ids);
+            assert_eq!(get_drop_counter(), 0);
+            drop(_msg);
+            assert_eq!(get_drop_counter(), 1);
+        } else {
+            unreachable!();
+        }
+        let th = async_spawn!(async move {
+            let _msg = rx.recv().await.expect("recv");
+            assert_eq!(_msg.get_value(), 0);
+            drop(_msg);
+            sleep(Duration::from_millis(20)).await;
+        });
+        let msg = M::new(ids);
+        tx.send(msg).await.expect("send");
+        ids += 1;
+        let _ = th.await;
+        sleep(Duration::from_millis(20)).await;
+        assert_eq!(get_drop_counter(), 2);
+        let msg = M::new(ids);
+        if let Err(TrySendError::Disconnected(_msg)) = tx.try_send(msg) {
+            assert_eq!(_msg.get_value(), ids);
+        } else {
+            unreachable!();
+        }
+        ids += 1;
+        let msg = M::new(ids);
+        if let Err(SendError(_msg)) = tx.send(msg).await {
+            assert_eq!(_msg.get_value(), ids);
+        } else {
+            unreachable!();
+        }
+        assert_eq!(get_drop_counter(), 4);
+        ids += 1;
+        drop(tx);
+        sleep(Duration::from_millis(20)).await;
+        // every thing dropped inside the channel
+        assert_eq!(get_drop_counter(), ids + 1); // ids begins at 0
+        assert_eq!(get_drop_counter(), 4 + cap);
+    });
+}
