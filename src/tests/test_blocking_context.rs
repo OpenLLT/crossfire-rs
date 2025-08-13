@@ -1,3 +1,4 @@
+use super::common::*;
 use crate::*;
 use captains_log::{logfn, *};
 use rstest::*;
@@ -564,4 +565,89 @@ fn test_conversion() {
     let (mtx, mrx) = mpmc::bounded_blocking::<usize>(1);
     let _tx: Tx<usize> = mtx.into();
     let _rx: Rx<usize> = mrx.into();
+}
+
+// This test make sure we have correctly use of maybeuninit
+#[logfn]
+#[rstest]
+#[case(spsc::bounded_blocking::<SmallMsg>(1))]
+#[case(spsc::bounded_blocking::<SmallMsg>(10))]
+#[case(mpsc::bounded_blocking::<SmallMsg>(1))]
+#[case(mpsc::bounded_blocking::<SmallMsg>(10))]
+#[case(mpmc::bounded_blocking::<SmallMsg>(1))]
+#[case(mpmc::bounded_blocking::<SmallMsg>(10))]
+fn test_drop_small_msg<T: BlockingTxTrait<SmallMsg>, R: BlockingRxTrait<SmallMsg>>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    println!("needs_drop {}", std::mem::needs_drop::<SmallMsg>());
+    _test_drop_msg(channel);
+}
+
+// This test make sure we have correctly use of maybeuninit
+#[logfn]
+#[rstest]
+#[case(spsc::bounded_blocking::<LargeMsg>(1))]
+#[case(spsc::bounded_blocking::<LargeMsg>(10))]
+#[case(mpsc::bounded_blocking::<LargeMsg>(1))]
+#[case(mpsc::bounded_blocking::<LargeMsg>(10))]
+#[case(mpmc::bounded_blocking::<LargeMsg>(1))]
+#[case(mpmc::bounded_blocking::<LargeMsg>(10))]
+fn test_drop_large_msg<T: BlockingTxTrait<LargeMsg>, R: BlockingRxTrait<LargeMsg>>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    println!("needs_drop {}", std::mem::needs_drop::<LargeMsg>());
+    _test_drop_msg(channel);
+}
+
+fn _test_drop_msg<M: TestDropMsg, T: BlockingTxTrait<M>, R: BlockingRxTrait<M>>(channel: (T, R)) {
+    let (tx, rx) = channel;
+    reset_drop_counter();
+    let cap = tx.capacity().unwrap();
+    let mut ids = cap;
+    for i in 0..ids {
+        let msg = M::new(i);
+        assert!(tx.try_send(msg).is_ok());
+    }
+    assert_eq!(get_drop_counter(), 0);
+    let msg = M::new(ids);
+    if let Err(TrySendError::Full(_msg)) = tx.try_send(msg) {
+        assert_eq!(_msg.get_value(), ids);
+        assert_eq!(get_drop_counter(), 0);
+        drop(_msg);
+        assert_eq!(get_drop_counter(), 1);
+    } else {
+        unreachable!();
+    }
+    let th = thread::spawn(move || {
+        let _msg = rx.recv().expect("recv");
+        assert_eq!(_msg.get_value(), 0);
+        drop(_msg);
+        sleep(Duration::from_millis(50));
+    });
+    let msg = M::new(ids);
+    tx.send(msg).expect("send");
+    ids += 1;
+    let _ = th.join();
+    sleep(Duration::from_millis(20));
+    assert_eq!(get_drop_counter(), 2);
+    let msg = M::new(ids);
+    if let Err(TrySendError::Disconnected(_msg)) = tx.try_send(msg) {
+        assert_eq!(_msg.get_value(), ids);
+    } else {
+        unreachable!();
+    }
+    ids += 1;
+    let msg = M::new(ids);
+    if let Err(SendError(_msg)) = tx.send(msg) {
+        assert_eq!(_msg.get_value(), ids);
+    } else {
+        unreachable!();
+    }
+    assert_eq!(get_drop_counter(), 4);
+    ids += 1;
+    drop(tx);
+    sleep(Duration::from_millis(50));
+    // every thing dropped inside the channel
+    assert_eq!(get_drop_counter(), ids + 1); // ids begins at 0
+    assert_eq!(get_drop_counter(), 4 + cap);
 }
