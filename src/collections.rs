@@ -91,22 +91,43 @@ impl<T> WeakCell<T> {
 
     #[inline(always)]
     pub fn pop(&self) -> Option<Arc<T>> {
-        if self.ptr.load(Ordering::SeqCst) == ptr::null_mut() {
+        let mut v = self.ptr.load(Ordering::SeqCst);
+        if v == ptr::null_mut() {
             return None;
         }
-        let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
-        if ptr != ptr::null_mut() {
-            return unsafe { Weak::from_raw(ptr) }.upgrade();
-        } else {
-            None
+        loop {
+            match self.ptr.compare_exchange(v, ptr::null_mut(), Ordering::SeqCst, Ordering::Acquire)
+            {
+                Ok(_) => return unsafe { Weak::from_raw(v) }.upgrade(),
+                Err(_v) => {
+                    if _v == ptr::null_mut() {
+                        return None;
+                    }
+                    v = _v;
+                }
+            }
         }
     }
 
     pub fn clear(&self) {
-        let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
-        if ptr != ptr::null_mut() {
-            // Convert into Weak and drop
-            let _ = unsafe { Weak::from_raw(ptr) };
+        let mut v = self.ptr.load(Ordering::Acquire);
+        if v == ptr::null_mut() {
+            return;
+        }
+        loop {
+            match self.ptr.compare_exchange(v, ptr::null_mut(), Ordering::SeqCst, Ordering::Acquire)
+            {
+                Ok(_) => {
+                    let _ = unsafe { Weak::from_raw(v) };
+                    return;
+                }
+                Err(_v) => {
+                    if _v == ptr::null_mut() {
+                        return;
+                    }
+                    v = _v;
+                }
+            }
         }
     }
 
