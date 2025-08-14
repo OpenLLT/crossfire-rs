@@ -213,6 +213,9 @@ impl<T> AsyncRx<T> {
                 }
             } else if state == WakerState::WAKED as u8 {
                 waker.check_waker_nolock(ctx);
+            } else if state == WakerState::CLOSED as u8 {
+                try_recv!();
+                return Err(TryRecvError::Disconnected);
             }
         } else {
             // First call
@@ -238,14 +241,13 @@ impl<T> AsyncRx<T> {
             o_waker.replace(waker);
             _waker = o_waker.as_ref().unwrap();
         }
-        if shared.reg_recv(_waker).is_ok() {
-            // NOTE: The other side put something whie reg_send and did not see the waker,
-            // should check the channel again, otherwise might incur a dead lock.
-            if !shared.is_empty() {
-                try_recv!(_waker);
-            }
-            _waker.commit_waiting();
+        shared.reg_recv(_waker);
+        // NOTE: The other side put something whie reg_send and did not see the waker,
+        // should check the channel again, otherwise might incur a dead lock.
+        if !shared.is_empty() {
+            try_recv!(_waker);
         }
+        _waker.commit_waiting();
         if shared.is_disconnected() {
             try_recv!();
             return Err(TryRecvError::Disconnected);
