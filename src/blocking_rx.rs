@@ -3,6 +3,7 @@ use crate::{channel::*, AsyncRx, MAsyncRx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -44,7 +45,7 @@ pub struct Rx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    waker_cache: WakerCache<RecvWaker>,
+    waker_cache: WakerCache<RecvWaker<T>>,
 }
 
 unsafe impl<T: Send> Send for Rx<T> {}
@@ -112,22 +113,26 @@ impl<T> Rx<T> {
             }
             let waker = self.waker_cache.new_blocking();
             let mut state;
+            let mut item: MaybeUninit<T> = MaybeUninit::uninit();
             'MAIN: loop {
                 shared.reg_recv(&waker);
                 if shared.is_empty() {
+                    waker.set_ptr(item.as_mut_ptr());
                     state = waker.commit_waiting();
                 } else {
                     if let Some(item) = shared.try_recv() {
                         shared.on_recv();
                         shared.recv_waker_cancel(&waker);
                         return Ok(item);
+                    } else {
+                        waker.set_ptr(item.as_mut_ptr());
+                        state = waker.commit_waiting();
                     }
-                    state = waker.commit_waiting();
-                }
-                if shared.is_disconnected() {
-                    break 'MAIN;
                 }
                 while state == WakerState::WAITING as u8 {
+                    if shared.is_disconnected() {
+                        break 'MAIN;
+                    }
                     match check_timeout(deadline) {
                         Ok(None) => {
                             std::thread::park();
@@ -136,13 +141,24 @@ impl<T> Rx<T> {
                             std::thread::park_timeout(dur);
                         }
                         Err(_) => {
-                            let _ = shared.abandon_recv_waker(waker);
-                            return Err(RecvTimeoutError::Timeout);
+                            if shared.abandon_recv_waker(waker) {
+                                return Err(RecvTimeoutError::Timeout);
+                            } else {
+                                // state is WakerState::DONE
+                                return Ok(unsafe { item.assume_init_read() });
+                            }
                         }
                     }
                     state = waker.get_state();
                 }
-                if state == WakerState::CLOSED as u8 {
+                if state == WakerState::COPY as u8 {
+                    state = waker.wait_copying(&mut backoff);
+                    debug_assert_eq!(state, WakerState::DONE as u8);
+                }
+                if state == WakerState::DONE as u8 {
+                    self.waker_cache.push(waker);
+                    return Ok(unsafe { item.assume_init_read() });
+                } else if state == WakerState::CLOSED as u8 {
                     break 'MAIN;
                 }
                 backoff.reset();

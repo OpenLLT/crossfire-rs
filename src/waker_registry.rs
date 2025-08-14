@@ -24,8 +24,13 @@ impl<T> RegistrySender<T> {
 
     #[inline(always)]
     pub fn reg_waker(&self, waker: &SendWaker<T>) {
-        debug_assert_eq!(waker.load_ptr(), std::ptr::null_mut());
-        waker.set_state(WakerState::WAITING);
+        if waker.get_state() == WakerState::WAKED as u8 {
+            waker.set_ptr(std::ptr::null_mut());
+            waker.set_state(WakerState::WAITING);
+        } else {
+            debug_assert_eq!(waker.load_ptr(), std::ptr::null_mut());
+            debug_assert_eq!(waker.get_state(), WakerState::WAITING as u8);
+        }
         // Clear the ptr in waker if it want to re-register
         match self {
             RegistrySender::Single(inner) => inner.reg_waker(waker),
@@ -72,12 +77,12 @@ impl<T> RegistrySender<T> {
     }
 }
 
-pub enum RegistryRecv {
-    Single(RegistrySingle<RecvWaker>),
-    Multi(RegistryMulti<RecvWaker>),
+pub enum RegistryRecv<T> {
+    Single(RegistrySingle<RecvWaker<T>>),
+    Multi(RegistryMulti<RecvWaker<T>>),
 }
 
-impl RegistryRecv {
+impl<T> RegistryRecv<T> {
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         match self {
@@ -87,12 +92,13 @@ impl RegistryRecv {
     }
 
     #[inline(always)]
-    pub fn reg_waker(&self, waker: &RecvWaker) {
-        let state = waker.get_state();
-        if state == WakerState::WAKED as u8 {
+    pub fn reg_waker(&self, waker: &RecvWaker<T>) {
+        if waker.get_state() != WakerState::INIT as u8 {
+            waker.set_ptr(std::ptr::null_mut());
             waker.set_state(WakerState::INIT);
         } else {
-            debug_assert_eq!(state, WakerState::INIT as u8);
+            debug_assert_eq!(waker.get_state(), WakerState::INIT as u8);
+            debug_assert_eq!(waker.load_ptr(), std::ptr::null_mut());
         }
         match self {
             RegistryRecv::Single(inner) => inner.reg_waker(waker),
@@ -110,7 +116,7 @@ impl RegistryRecv {
 
     /// cancel one outdated waker, make sure it does not accumulate
     #[inline(always)]
-    pub fn cancel_waker(&self, waker: &RecvWaker) {
+    pub fn cancel_waker(&self, waker: &RecvWaker<T>) {
         match self {
             RegistryRecv::Single(inner) => inner.cancel_waker(),
             RegistryRecv::Multi(inner) => inner.cancel_waker(waker.get_seq()),
@@ -118,7 +124,7 @@ impl RegistryRecv {
     }
 
     #[inline(always)]
-    pub fn pop(&self) -> Option<RecvWaker> {
+    pub fn pop(&self) -> Option<RecvWaker<T>> {
         match self {
             RegistryRecv::Single(inner) => inner.pop(),
             RegistryRecv::Multi(inner) => inner.pop(),
@@ -296,7 +302,7 @@ mod tests {
     use crate::locked_waker::RecvWaker;
     #[test]
     fn test_registry_multi() {
-        let reg = RegistryRecv::Multi(RegistryMulti::new());
+        let reg = RegistryRecv::<()>::Multi(RegistryMulti::new());
 
         // test push
         let waker1 = RecvWaker::new_blocking();

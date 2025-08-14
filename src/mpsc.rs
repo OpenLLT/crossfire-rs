@@ -47,7 +47,7 @@ use crate::channel::*;
 /// Sender will never block, so we use the same TxBlocking for threads
 pub fn unbounded_blocking<T: Unpin>() -> (MTx<T>, Rx<T>) {
     let send_wakers = RegistrySender::Dummy(RegistryDummy::<SendWaker<T>>::new());
-    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker>::new());
+    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker<T>>::new());
     let shared = ChannelShared::new(Channel::new_list(), send_wakers, recv_wakers);
     let tx = MTx::new(shared.clone());
     let rx = Rx::new(shared);
@@ -59,7 +59,7 @@ pub fn unbounded_blocking<T: Unpin>() -> (MTx<T>, Rx<T>) {
 /// Although sender type is MTx, will never block.
 pub fn unbounded_async<T: Unpin>() -> (MTx<T>, AsyncRx<T>) {
     let send_wakers = RegistrySender::Dummy(RegistryDummy::<SendWaker<T>>::new());
-    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker>::new());
+    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker<T>>::new());
     let shared = ChannelShared::new(Channel::new_list(), send_wakers, recv_wakers);
     let tx = MTx::new(shared.clone());
     let rx = AsyncRx::new(shared);
@@ -74,7 +74,7 @@ pub fn bounded_blocking<T: Unpin>(mut size: usize) -> (MTx<T>, Rx<T>) {
         size = 1;
     }
     let send_wakers = RegistrySender::Multi(RegistryMulti::<SendWaker<T>>::new());
-    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker>::new());
+    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker<T>>::new());
     let shared = ChannelShared::new(Channel::new_array(size), send_wakers, recv_wakers);
     let tx = MTx::new(shared.clone());
     let rx = Rx::new(shared);
@@ -89,7 +89,7 @@ pub fn bounded_async<T: Unpin>(mut size: usize) -> (MAsyncTx<T>, AsyncRx<T>) {
         size = 1;
     }
     let send_wakers = RegistrySender::Multi(RegistryMulti::<SendWaker<T>>::new());
-    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker>::new());
+    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker<T>>::new());
     let shared = ChannelShared::new(Channel::new_array(size), send_wakers, recv_wakers);
     let tx = MAsyncTx::new(shared.clone());
     let rx = AsyncRx::new(shared);
@@ -104,7 +104,7 @@ pub fn bounded_tx_async_rx_blocking<T: Unpin>(mut size: usize) -> (MAsyncTx<T>, 
         size = 1;
     }
     let send_wakers = RegistrySender::Multi(RegistryMulti::<SendWaker<T>>::new());
-    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker>::new());
+    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker<T>>::new());
     let shared = ChannelShared::new(Channel::new_array(size), send_wakers, recv_wakers);
     let tx = MAsyncTx::new(shared.clone());
     let rx = Rx::new(shared);
@@ -119,7 +119,7 @@ pub fn bounded_tx_blocking_rx_async<T>(mut size: usize) -> (MTx<T>, AsyncRx<T>) 
         size = 1;
     }
     let send_wakers = RegistrySender::Multi(RegistryMulti::<SendWaker<T>>::new());
-    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker>::new());
+    let recv_wakers = RegistryRecv::Single(RegistrySingle::<RecvWaker<T>>::new());
     let shared = ChannelShared::new(Channel::new_array(size), send_wakers, recv_wakers);
     let tx = MTx::new(shared.clone());
     let rx = AsyncRx::new(shared);

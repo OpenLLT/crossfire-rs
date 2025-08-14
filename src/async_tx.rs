@@ -268,7 +268,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 backoff.replace(_backoff);
             }
             let waker = if let Some(w) = o_waker.take() {
-                w.set_ptr(std::ptr::null_mut());
                 w.check_waker_nolock(ctx);
                 w
             } else {

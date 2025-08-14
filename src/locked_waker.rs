@@ -2,7 +2,7 @@ use crate::backoff::*;
 use crate::collections::ArcCell;
 use std::cell::UnsafeCell;
 use std::fmt;
-use std::mem::transmute;
+use std::mem::{transmute, MaybeUninit};
 use std::ops::Deref;
 use std::ptr;
 use std::sync::{
@@ -103,7 +103,7 @@ impl<T> WakerTrait for SendWaker<T> {
     fn new_blocking() -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
-            state: AtomicU8::new(WakerState::WAKED as u8),
+            state: AtomicU8::new(WakerState::WAITING as u8),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
             payload: AtomicPtr::new(ptr::null_mut()),
         }))
@@ -111,7 +111,7 @@ impl<T> WakerTrait for SendWaker<T> {
 
     #[inline(always)]
     fn reset(inner: &Arc<Self::Inner>) {
-        inner.state.store(WakerState::WAKED as u8, Ordering::Relaxed);
+        inner.state.store(WakerState::WAITING as u8, Ordering::Release);
         // Will reset the payload in reg_waker()
         inner.payload.store(ptr::null_mut(), Ordering::Relaxed);
     }
@@ -148,30 +148,30 @@ impl<T> WakerTrait for SendWaker<T> {
     }
 }
 
-pub struct RecvWaker(Arc<WakerInner<()>>);
+pub struct RecvWaker<T>(Arc<WakerInner<AtomicPtr<T>>>);
 
-impl fmt::Debug for RecvWaker {
+impl<T> fmt::Debug for RecvWaker<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "waker({} state={})", self.get_seq(), self.get_state())
     }
 }
 
-impl Deref for RecvWaker {
-    type Target = WakerInner<()>;
+impl<T> Deref for RecvWaker<T> {
+    type Target = WakerInner<AtomicPtr<T>>;
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
 
-impl RecvWaker {
+impl<T> RecvWaker<T> {
     #[inline(always)]
     pub fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
             state: AtomicU8::new(WakerState::INIT as u8),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
-            payload: (),
+            payload: AtomicPtr::new(ptr::null_mut()),
         }))
     }
 
@@ -182,17 +182,53 @@ impl RecvWaker {
     }
 
     #[inline(always)]
+    pub fn wait_copying(&self, backoff: &mut Backoff) -> u8 {
+        backoff.reset();
+        loop {
+            backoff.snooze();
+            let state = self.get_state();
+            if state >= WakerState::WAKED as u8 {
+                return state;
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn commit_waiting(&self) -> u8 {
-        if let Err(s) = self.try_change_state(WakerState::INIT, WakerState::WAITING) {
-            return s;
+        if let Err(state) = self.try_change_state(WakerState::INIT, WakerState::WAITING) {
+            return state;
         } else {
             return WakerState::WAITING as u8;
         }
     }
+
+    #[inline(always)]
+    pub fn set_ptr(&self, p: *mut T) {
+        self.payload.store(p, Ordering::Release);
+    }
+
+    #[inline(always)]
+    pub fn load_ptr(&self) -> *mut T {
+        self.payload.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn copy(&self, item: &MaybeUninit<T>) -> bool {
+        let p = self.load_ptr();
+        if p != ptr::null_mut() {
+            if self.change_state_smaller_eq(WakerState::WAITING, WakerState::COPY).is_ok() {
+                unsafe { ptr::copy_nonoverlapping(item.as_ptr(), p, 1) };
+                self.set_state(WakerState::DONE);
+                self._wake_nolock();
+                return true;
+            }
+        }
+        false
+    }
 }
 
-impl WakerTrait for RecvWaker {
-    type Inner = WakerInner<()>;
+impl<T> WakerTrait for RecvWaker<T> {
+    type Inner = WakerInner<AtomicPtr<T>>;
 
     #[inline(always)]
     fn from_arc(inner: Arc<Self::Inner>) -> Self {
@@ -210,13 +246,14 @@ impl WakerTrait for RecvWaker {
             seq: AtomicUsize::new(0),
             state: AtomicU8::new(WakerState::INIT as u8),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
-            payload: (),
+            payload: AtomicPtr::new(ptr::null_mut()),
         }))
     }
 
     #[inline(always)]
     fn reset(inner: &Arc<Self::Inner>) {
-        inner.state.store(WakerState::INIT as u8, Ordering::Relaxed);
+        inner.state.store(WakerState::INIT as u8, Ordering::Release);
+        inner.payload.store(ptr::null_mut(), Ordering::Release);
     }
 
     #[inline(always)]

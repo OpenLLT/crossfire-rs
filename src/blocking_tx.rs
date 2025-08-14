@@ -77,6 +77,18 @@ impl<T> From<AsyncTx<T>> for Tx<T> {
 
 impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
+    fn _on_send(shared: &ChannelShared<T>, o_recv_waker: Option<RecvWaker<T>>) {
+        if let Some(waker) = o_recv_waker {
+            if let Ok(state) = waker.wake_simple() {
+                if state != WakerState::INIT as u8 {
+                    return;
+                }
+            }
+        }
+        shared.on_send();
+    }
+
+    #[inline(always)]
     pub(crate) fn _send_blocking(
         &self, item: T, deadline: Option<Instant>,
     ) -> Result<(), SendTimeoutError<T>> {
@@ -88,9 +100,21 @@ impl<T: Send + 'static> Tx<T> {
             todo!();
         } else {
             let mut _item = MaybeUninit::new(item);
-            if shared.send(&_item) {
-                shared.on_send();
-                return Ok(());
+            let o_recv_waker = self.shared.recvs.pop();
+            if let Some(waker) = o_recv_waker.as_ref() {
+                if waker.copy(&_item) {
+                    return Ok(());
+                }
+                if shared.send(&_item) {
+                    Self::_on_send(shared, o_recv_waker);
+                    return Ok(());
+                }
+                let _ = waker.wake_simple();
+            } else {
+                if shared.send(&_item) {
+                    shared.on_send();
+                    return Ok(());
+                }
             }
             let mut o_waker: Option<SendWaker<T>> = None;
             let mut state: u8;
@@ -138,7 +162,6 @@ impl<T: Send + 'static> Tx<T> {
             }
             loop {
                 let waker = if let Some(w) = o_waker.take() {
-                    w.set_ptr(std::ptr::null_mut());
                     w
                 } else {
                     let w = self.waker_cache.new_blocking();

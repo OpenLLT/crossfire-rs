@@ -11,7 +11,7 @@ use std::task::*;
 /// Implemented futures::stream::Stream;
 pub struct AsyncStream<T> {
     rx: AsyncRx<T>,
-    waker: Option<RecvWaker>,
+    waker: Option<RecvWaker<T>>,
     ended: bool,
 }
 

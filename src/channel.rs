@@ -68,13 +68,13 @@ pub struct ChannelShared<T> {
     rx_count: AtomicUsize,
     inner: Channel<T>,
     pub(crate) senders: RegistrySender<T>,
-    pub(crate) recvs: RegistryRecv,
+    pub(crate) recvs: RegistryRecv<T>,
     bound_size: Option<u32>,
 }
 
 impl<T> ChannelShared<T> {
     pub(crate) fn new(
-        inner: Channel<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
+        inner: Channel<T>, senders: RegistrySender<T>, recvs: RegistryRecv<T>,
     ) -> Arc<Self> {
         Arc::new(Self {
             closed: AtomicBool::new(false),
@@ -190,7 +190,7 @@ impl<T> ChannelShared<T> {
 
     /// Register waker for current rx
     #[inline(always)]
-    pub(crate) fn reg_recv(&self, o_waker: &RecvWaker) {
+    pub(crate) fn reg_recv(&self, o_waker: &RecvWaker<T>) {
         self.recvs.reg_waker(o_waker)
     }
 
@@ -395,7 +395,7 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn recv_waker_cancel(&self, waker: &RecvWaker) {
+    pub(crate) fn recv_waker_cancel(&self, waker: &RecvWaker<T>) {
         if waker.cancel() {
             self.recvs.cancel_waker(&waker);
         }
@@ -421,7 +421,7 @@ impl<T> ChannelShared<T> {
 
     /// Call on cancellation, return true to indicate drop temporary message
     #[inline(always)]
-    pub(crate) fn abandon_recv_waker(&self, waker: RecvWaker) -> bool {
+    pub(crate) fn abandon_recv_waker(&self, waker: RecvWaker<T>) -> bool {
         let state = waker.abandon();
         if state == WakerState::CLOSED as u8 {
             self.recvs.clear_wakers(waker.get_seq());

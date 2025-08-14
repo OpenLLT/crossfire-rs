@@ -174,7 +174,7 @@ impl<T> AsyncRx<T> {
     /// Return Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub(crate) fn poll_item(
-        &self, ctx: &mut Context, o_waker: &mut Option<RecvWaker>, stream: bool,
+        &self, ctx: &mut Context, o_waker: &mut Option<RecvWaker<T>>, stream: bool,
     ) -> Result<T, TryRecvError> {
         let shared = &self.shared;
         // When the result is not TryRecvError::Empty,
@@ -238,7 +238,7 @@ impl<T> AsyncRx<T> {
         if let Some(waker) = o_waker.as_ref() {
             _waker = waker;
         } else {
-            let waker = RecvWaker::new_async(ctx);
+            let waker = RecvWaker::<T>::new_async(ctx);
             o_waker.replace(waker);
             _waker = o_waker.as_ref().unwrap();
         }
@@ -273,7 +273,7 @@ impl<T> AsyncRx<T> {
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
 pub struct RecvFuture<'a, T> {
     rx: &'a AsyncRx<T>,
-    waker: Option<RecvWaker>,
+    waker: Option<RecvWaker<T>>,
 }
 
 unsafe impl<T: Send> Send for RecvFuture<'_, T> {}
@@ -312,7 +312,7 @@ impl<T> Future for RecvFuture<'_, T> {
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
 pub struct RecvTimeoutFuture<'a, T> {
     rx: &'a AsyncRx<T>,
-    waker: Option<RecvWaker>,
+    waker: Option<RecvWaker<T>>,
     sleep: Pin<Box<dyn Future<Output = ()>>>,
 }
 
