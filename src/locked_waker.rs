@@ -404,11 +404,27 @@ impl<P> WakerInner<P> {
     /// Assume no lock
     #[inline(always)]
     pub fn wake_simple(&self) -> Result<u8, ()> {
-        if let Ok(state) = self.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED) {
-            self._wake_nolock();
-            return Ok(state);
+        let mut state = self.get_state();
+        loop {
+            if state >= WakerState::WAKED as u8 {
+                return Err(());
+            }
+            match self.state.compare_exchange(
+                state,
+                WakerState::WAKED as u8,
+                Ordering::Release,
+                Ordering::Acquire,
+            ) {
+                Ok(state) => {
+                    self._wake_nolock();
+                    return Ok(state);
+                }
+                Err(s) => {
+                    debug_assert!(state != WakerState::COPY as u8, "unexpected state {}", s);
+                    state = s;
+                }
+            }
         }
-        return Err(());
     }
 
     pub fn will_wake(&self, ctx: &mut Context) -> bool {
