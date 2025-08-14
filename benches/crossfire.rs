@@ -292,6 +292,8 @@ fn bench_crossfire_bounded_100_blocking_mpsc(c: &mut Criterion) {
                 _crossfire_blocking(_crossfire_btx_clone(tx, *i), vec![rx], ONE_MILLION);
             })
         });
+    }
+    for tx_count in [1, 2, 4, 8, 16] {
         group.throughput(Throughput::Elements(ONE_MILLION as u64));
         group.bench_with_input(BenchmarkId::new("mpmc", tx_count), &tx_count, |b, i| {
             b.iter(move || {
