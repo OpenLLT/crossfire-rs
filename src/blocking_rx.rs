@@ -44,7 +44,7 @@ pub struct Rx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    waker_cache: WakerCache<RecvWaker>,
+    waker_cache: WakerCache<()>,
 }
 
 unsafe impl<T: Send> Send for Rx<T> {}
@@ -110,7 +110,7 @@ impl<T> Rx<T> {
                     break;
                 }
             }
-            let waker = self.waker_cache.new_blocking();
+            let waker = self.waker_cache.new_blocking(());
             let mut state;
             'MAIN: loop {
                 if waker.get_state() == WakerState::Waked as u8 {

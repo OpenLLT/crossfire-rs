@@ -239,7 +239,7 @@ impl<T> AsyncRx<T> {
             waker.set_state(WakerState::Init);
             _waker = waker;
         } else {
-            let waker = RecvWaker::new_async(ctx);
+            let waker = RecvWaker::new_async(ctx, ());
             o_waker.replace(waker);
             _waker = o_waker.as_ref().unwrap();
         }
@@ -249,7 +249,9 @@ impl<T> AsyncRx<T> {
         if !shared.is_empty() {
             try_recv!(_waker);
         }
-        _waker.commit_waiting();
+        if !stream {
+            _waker.commit_waiting();
+        }
         if shared.is_disconnected() {
             try_recv!(_waker);
             return Err(TryRecvError::Disconnected);

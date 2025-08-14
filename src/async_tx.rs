@@ -260,20 +260,19 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 backoff.replace(_backoff);
             }
             let waker = if let Some(w) = o_waker.take() {
-                w.set_ptr(std::ptr::null_mut());
                 w.set_state(WakerState::Init);
                 w.check_waker_nolock(ctx);
                 w
             } else {
-                SendWaker::new_async(ctx)
+                SendWaker::<T>::new_async(ctx, std::ptr::null_mut())
             };
-            (state, _waker) = shared.sender_reg_and_try(item, waker);
+            (state, _waker) = shared.sender_reg_and_try(item, waker, sink);
             *o_waker = _waker;
-            if state < WakerState::Waked as u8 {
-                if let Some(_backoff) = backoff.as_mut() {
-                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), _backoff);
-                }
-            }
+            //            if state < WakerState::Waked as u8 {
+            //                if let Some(_backoff) = backoff.as_mut() {
+            //                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), _backoff);
+            //                }
+            //            }
             if state < WakerState::Waked as u8 {
                 return Poll::Pending;
             } else if state > WakerState::Waked as u8 {

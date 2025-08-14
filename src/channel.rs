@@ -1,12 +1,11 @@
-pub use super::waker_registry::*;
 use crate::backoff::*;
 use crate::crossbeam::array_queue::ArrayQueue;
 pub use crate::crossbeam::err::*;
 pub use crate::locked_waker::*;
+pub use crate::waker_registry::*;
 use crossbeam_queue::SegQueue;
 use std::mem::MaybeUninit;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Context;
 use std::time::{Duration, Instant};
@@ -66,6 +65,7 @@ pub struct ChannelShared<T> {
     closed: AtomicBool,
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
+    congest: AtomicIsize,
     inner: Channel<T>,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
@@ -80,6 +80,7 @@ impl<T> ChannelShared<T> {
             closed: AtomicBool::new(false),
             tx_count: AtomicUsize::new(1),
             rx_count: AtomicUsize::new(1),
+            congest: AtomicIsize::new(0),
             senders,
             recvs,
             bound_size: if let Some(bound) = inner.capacity() { Some(bound as u32) } else { None },
@@ -145,6 +146,11 @@ impl<T> ChannelShared<T> {
         self.rx_count.load(Ordering::Acquire) as usize
     }
 
+    #[inline(always)]
+    pub(crate) fn is_congest(&self) -> bool {
+        self.congest.load(Ordering::Relaxed) > 0
+    }
+
     /// Just for debugging purpose, to monitor queue size
     pub fn get_wakers_count(&self) -> (usize, usize) {
         (self.senders.len(), self.recvs.len())
@@ -153,16 +159,19 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn add_tx(&self) {
         let _ = self.tx_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.congest.fetch_add(1, Ordering::Release);
     }
 
     #[inline(always)]
     pub(crate) fn add_rx(&self) {
         let _ = self.rx_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.congest.fetch_sub(1, Ordering::Release);
     }
 
     /// Call when tx drop
     #[inline(always)]
     pub(crate) fn close_tx(&self) {
+        let _ = self.congest.fetch_sub(1, Ordering::Release);
         if self.tx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
             self.closed.store(true, Ordering::SeqCst);
             self._close_all();
@@ -172,6 +181,7 @@ impl<T> ChannelShared<T> {
     /// Call when rx drop
     #[inline(always)]
     pub(crate) fn close_rx(&self) {
+        let _ = self.congest.fetch_add(1, Ordering::Release);
         if self.rx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
             self.closed.store(true, Ordering::SeqCst);
             self._close_all();
@@ -180,12 +190,8 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     fn _close_all(&self) {
-        while let Some(waker) = self.recvs.pop() {
-            waker.close_wake();
-        }
-        while let Some(waker) = self.senders.pop() {
-            waker.close_wake();
-        }
+        self.senders.close();
+        self.recvs.close();
     }
 
     /// Register waker for current rx
@@ -226,8 +232,10 @@ impl<T> ChannelShared<T> {
     pub(crate) fn sender_try_again_async(
         &self, waker: SendWaker<T>, ctx: &mut Context,
     ) -> (u8, Option<SendWaker<T>>) {
+        // NOTE: it's possible be WakerState::INIT for AsyncSink::poll_send()
+        // Async context does not use direct copy, so there won't be COPY state.
         if self.is_disconnected() {
-            match waker.try_change_state(WakerState::Waiting, WakerState::Closed) {
+            match waker.change_state_smaller_eq(WakerState::Waiting, WakerState::Closed) {
                 Ok(_) => {
                     return (WakerState::Closed as u8, None);
                 }
@@ -260,7 +268,7 @@ impl<T> ChannelShared<T> {
                     return (state, Some(waker));
                 } else {
                     // The waker could not be used anymore
-                    match waker.try_change_state(WakerState::Waiting, WakerState::Waked) {
+                    match waker.change_state_smaller_eq(WakerState::Waiting, WakerState::Waked) {
                         Ok(_) => {
                             // This is rare case for idle select with spurious wake
                             self.senders.cancel_waker(&waker);
@@ -287,7 +295,7 @@ impl<T> ChannelShared<T> {
     /// when need_wake == false, will always return Some(state).
     #[inline]
     pub(crate) fn sender_reg_and_try(
-        &self, item: &mut MaybeUninit<T>, waker: SendWaker<T>,
+        &self, item: &mut MaybeUninit<T>, waker: SendWaker<T>, sink: bool,
     ) -> (u8, Option<SendWaker<T>>) {
         self.senders.reg_waker(&waker);
         // Not allow Spurious wake and enter this function again;
@@ -298,24 +306,36 @@ impl<T> ChannelShared<T> {
                 self.on_send();
                 return (WakerState::Done as u8, Some(waker));
             } else {
-                waker.set_ptr(item.as_mut_ptr());
-                if self.is_disconnected() {
-                    return (WakerState::Closed as u8, None);
+                if sink {
+                    if self.is_disconnected() {
+                        return (WakerState::Closed as u8, None);
+                    } else {
+                        // outside logic only regconize Waiting
+                        return (WakerState::Waiting as u8, Some(waker));
+                    }
                 } else {
-                    return (WakerState::Waiting as u8, Some(waker));
+                    let state = waker.commit_waiting();
+                    // let on_recv do it's job,
+                    // is_disconnected == true means no receivers
+                    if self.is_disconnected() {
+                        return (WakerState::Closed as u8, None);
+                    } else {
+                        return (state, Some(waker));
+                    }
                 }
             }
         } else {
-            // Cancel to try again outside
-            // Just flow away this waker, on_recv will try to wake Init state.
-            match waker.try_change_state(WakerState::Waiting, WakerState::Waked) {
+            match waker.try_change_state(WakerState::Init, WakerState::Waked) {
                 Ok(_) => {
                     self.senders.cancel_waker(&waker);
+                    // Unlikely to be disconnected,
                     // might be in queue, should not use again
+                    // Retry send outside
                     return (WakerState::Waked as u8, None);
                 }
-                Err(_) => {
-                    return (WakerState::Waked as u8, Some(waker));
+                Err(state) => {
+                    // changed by waker, might be: COPY, Waked, or Done.
+                    return (state, Some(waker));
                 }
             }
         }
@@ -324,6 +344,7 @@ impl<T> ChannelShared<T> {
     /// Prevent Copy state enter
     #[inline(always)]
     pub(crate) fn sender_snooze(&self, waker: &SendWaker<T>, backoff: &mut Backoff) -> u8 {
+        backoff.reset();
         loop {
             backoff.snooze();
             let state = waker.get_state();
@@ -335,61 +356,40 @@ impl<T> ChannelShared<T> {
         }
     }
 
-    /// Return is_waked
-    #[inline]
-    pub(crate) fn on_recv_try_send(&self, waker: &SendWaker<T>) -> bool {
-        // the receiver no need to check disconnect,
-        // its impossible if there's live waker
-        // protect against:
-        // 1. sender_try_again_async () for spurious waked
-        // 2. blocking timeout
-        if waker.try_change_state(WakerState::Waiting, WakerState::Copy).is_err() {
-            // Waked set by cancel()
-            return false;
-        }
-        let p = waker.load_ptr();
-        if p == ptr::null_mut() {
-            if waker.try_change_state(WakerState::Copy, WakerState::Waked).is_ok() {
-                waker._wake_nolock();
-            }
-            return false;
-        }
-        if let Channel::Array(inner) = &self.inner {
-            if unsafe { inner.push_with_ptr(p) } {
-                waker.set_state(WakerState::Done);
-                waker._wake_nolock();
-                self.on_send();
-                return true;
-            }
-        } else {
-            unreachable!();
-        }
-        // still full
-        // Let the sender to re-register
-        waker.set_state(WakerState::Waked);
-        waker._wake_nolock();
-        // Do not try another
-        return true;
-    }
-
     /// Wake up one rx
     #[inline(always)]
     pub(crate) fn on_send(&self) {
-        while let Some(waker) = self.recvs.pop() {
-            if let Ok(state) = waker.wake_simple() {
-                if state != WakerState::Init as u8 {
-                    return;
-                }
-            }
-        }
+        self.recvs.fire();
     }
 
     /// Wake up one tx
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
-        while let Some(waker) = self.senders.pop() {
-            if self.on_recv_try_send(&waker) {
-                return;
+        if WakeResult::Sent == self.senders.fire(self) {
+            self.on_send();
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*mut T>) -> WakeResult {
+        match waker.wake_or_copy() {
+            Ok(r) => return r,
+            Err(p) => {
+                // There won't be direct copy when timeout and async,
+                // so it's safe to proceed without a COPY state, saving an atomic OP
+                if let Channel::Array(inner) = &self.inner {
+                    if unsafe { inner.push_with_ptr(p) } {
+                        waker.set_state(WakerState::Done);
+                        waker._wake_nolock();
+                        return WakeResult::Sent;
+                    } else {
+                        waker.set_state(WakerState::Waked);
+                        waker._wake_nolock();
+                        return WakeResult::PushBack;
+                    }
+                } else {
+                    unreachable!();
+                }
             }
         }
     }
