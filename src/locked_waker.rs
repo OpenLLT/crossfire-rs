@@ -58,12 +58,12 @@ impl<T> fmt::Debug for SendWaker<T> {
 
 impl<T> SendWaker<T> {
     #[inline(always)]
-    pub fn new_async(ctx: &Context, p: *mut T) -> Self {
+    pub fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
-            state: AtomicU8::new(WakerState::WAKED as u8),
+            state: AtomicU8::new(WakerState::WAITING as u8),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
-            payload: AtomicPtr::new(p),
+            payload: AtomicPtr::new(ptr::null_mut()),
         }))
     }
 
@@ -169,7 +169,7 @@ impl RecvWaker {
     pub fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
-            state: AtomicU8::new(WakerState::WAKED as u8),
+            state: AtomicU8::new(WakerState::INIT as u8),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
             payload: (),
         }))
@@ -208,7 +208,7 @@ impl WakerTrait for RecvWaker {
     fn new_blocking() -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
-            state: AtomicU8::new(WakerState::WAKED as u8),
+            state: AtomicU8::new(WakerState::INIT as u8),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
             payload: (),
         }))
@@ -216,7 +216,7 @@ impl WakerTrait for RecvWaker {
 
     #[inline(always)]
     fn reset(inner: &Arc<Self::Inner>) {
-        inner.state.store(WakerState::WAKED as u8, Ordering::Release);
+        inner.state.store(WakerState::INIT as u8, Ordering::Release);
     }
 
     #[inline(always)]
@@ -354,6 +354,7 @@ impl<P> WakerInner<P> {
         }
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub fn is_waked(&self) -> bool {
         self.state.load(Ordering::Acquire) >= WakerState::WAKED as u8
@@ -458,6 +459,7 @@ impl<T: WakerTrait> WakerCache<T> {
     pub(crate) fn new_blocking(&self) -> T {
         if let Some(inner) = self.0.pop() {
             T::update_blocking_thread(&inner);
+            T::reset(&inner);
             return T::from_arc(inner);
         }
         return T::new_blocking();
@@ -470,7 +472,6 @@ impl<T: WakerTrait> WakerCache<T> {
         }
         let a = waker.to_arc();
         if Arc::weak_count(&a) == 0 && Arc::strong_count(&a) == 1 {
-            T::reset(&a);
             self.0.try_put(a);
         }
     }

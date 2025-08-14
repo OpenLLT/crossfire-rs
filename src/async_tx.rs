@@ -262,7 +262,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 w.check_waker_nolock(ctx);
                 w
             } else {
-                SendWaker::new_async(ctx, std::ptr::null_mut())
+                SendWaker::new_async(ctx)
             };
             (state, _waker) = shared.sender_reg_and_try(item, waker);
             *o_waker = _waker;
