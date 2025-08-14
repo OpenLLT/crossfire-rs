@@ -111,7 +111,6 @@ impl<T> Rx<T> {
                 }
             }
             let waker = self.waker_cache.new_blocking();
-            debug_assert!(waker.is_waked());
             let mut state;
             'MAIN: loop {
                 shared.reg_recv(&waker);

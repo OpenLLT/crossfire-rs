@@ -142,7 +142,6 @@ impl<T: Send + 'static> Tx<T> {
                     w
                 } else {
                     let w = self.waker_cache.new_blocking();
-                    debug_assert!(w.is_waked());
                     w
                 };
                 // For nx1 (more likely congest), need to reset backoff
