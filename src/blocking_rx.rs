@@ -114,25 +114,19 @@ impl<T> Rx<T> {
             debug_assert!(waker.is_waked());
             let mut state;
             'MAIN: loop {
-                match shared.reg_recv(&waker) {
-                    Ok(_) => {
-                        if shared.is_empty() {
-                            if shared.is_disconnected() {
-                                break 'MAIN;
-                            }
-                            state = waker.commit_waiting();
-                        } else {
-                            if let Some(item) = shared.try_recv() {
-                                shared.on_recv();
-                                shared.recv_waker_cancel(&waker);
-                                return Ok(item);
-                            }
-                            state = waker.commit_waiting();
-                        }
+                shared.reg_recv(&waker);
+                if shared.is_empty() {
+                    state = waker.commit_waiting();
+                } else {
+                    if let Some(item) = shared.try_recv() {
+                        shared.on_recv();
+                        shared.recv_waker_cancel(&waker);
+                        return Ok(item);
                     }
-                    Err(s) => {
-                        state = s;
-                    }
+                    state = waker.commit_waiting();
+                }
+                if shared.is_disconnected() {
+                    break 'MAIN;
                 }
                 while state == WakerState::WAITING as u8 {
                     match check_timeout(deadline) {
