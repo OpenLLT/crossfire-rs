@@ -216,12 +216,10 @@ impl<T> RecvWaker<T> {
     pub fn copy(&self, item: &MaybeUninit<T>) -> bool {
         let p = self.load_ptr();
         if p != ptr::null_mut() {
-            if self.change_state_smaller_eq(WakerState::WAITING, WakerState::COPY).is_ok() {
-                unsafe { ptr::copy_nonoverlapping(item.as_ptr(), p, 1) };
-                self.set_state(WakerState::DONE);
-                self._wake_nolock();
-                return true;
-            }
+            unsafe { ptr::copy_nonoverlapping(item.as_ptr(), p, 1) };
+            self.set_state(WakerState::DONE);
+            self._wake_nolock();
+            return true;
         }
         false
     }

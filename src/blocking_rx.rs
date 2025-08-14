@@ -117,7 +117,9 @@ impl<T> Rx<T> {
             'MAIN: loop {
                 shared.reg_recv(&waker);
                 if shared.is_empty() {
-                    waker.set_ptr(item.as_mut_ptr());
+                    if deadline.is_none() {
+                        waker.set_ptr(item.as_mut_ptr());
+                    }
                     state = waker.commit_waiting();
                 } else {
                     if let Some(item) = shared.try_recv() {
@@ -125,7 +127,9 @@ impl<T> Rx<T> {
                         shared.recv_waker_cancel(&waker);
                         return Ok(item);
                     } else {
-                        waker.set_ptr(item.as_mut_ptr());
+                        if deadline.is_none() {
+                            waker.set_ptr(item.as_mut_ptr());
+                        }
                         state = waker.commit_waiting();
                     }
                 }
