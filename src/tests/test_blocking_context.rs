@@ -622,7 +622,7 @@ fn _test_drop_msg<M: TestDropMsg, T: BlockingTxTrait<M>, R: BlockingRxTrait<M>>(
         let _msg = rx.recv().expect("recv");
         assert_eq!(_msg.get_value(), 0);
         drop(_msg);
-        sleep(Duration::from_millis(50));
+        sleep(Duration::from_secs(1));
     });
     let msg = M::new(ids);
     tx.send(msg).expect("send");
