@@ -2,30 +2,38 @@ use crate::collections::WeakCell;
 use crate::locked_waker::*;
 use crate::spinlock::Spinlock;
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 pub enum RegistrySender<T> {
-    Single(RegistrySingle<SendWaker<T>>),
-    Multi(RegistryMulti<SendWaker<T>>),
-    Dummy(RegistryDummy<SendWaker<T>>),
+    Single(RegistrySingle<*mut T>),
+    Multi(RegistryMulti<*mut T>),
+    Dummy,
 }
 
 impl<T> RegistrySender<T> {
+    #[inline(always)]
+    pub fn new_single() -> Self {
+        Self::Single(RegistrySingle::<*mut T>::new())
+    }
+
+    #[inline(always)]
+    pub fn new_multi() -> Self {
+        Self::Multi(RegistryMulti::<*mut T>::new())
+    }
+
     #[inline(always)]
     pub fn not_congest(&self) -> bool {
         match self {
             RegistrySender::Single(_) => true,
             RegistrySender::Multi(inner) => inner.is_empty(),
-            RegistrySender::Dummy(_) => true,
+            RegistrySender::Dummy => true,
         }
     }
 
     #[inline(always)]
     pub fn reg_waker(&self, waker: &SendWaker<T>) {
-        debug_assert_eq!(waker.load_ptr(), std::ptr::null_mut());
-        waker.set_state(WakerState::WAITING);
+        debug_assert_eq!(waker.get_state(), WakerState::INIT as u8);
         // Clear the ptr in waker if it want to re-register
         match self {
             RegistrySender::Single(inner) => inner.reg_waker(waker),
@@ -48,17 +56,29 @@ impl<T> RegistrySender<T> {
     pub fn cancel_waker(&self, waker: &SendWaker<T>) {
         match self {
             RegistrySender::Single(inner) => inner.cancel_waker(),
-            RegistrySender::Multi(inner) => inner.cancel_waker(waker.get_seq()),
-            RegistrySender::Dummy(_) => {}
+            RegistrySender::Multi(inner) => inner.clear_wakers(waker.get_seq()),
+            _ => {}
         }
     }
 
     #[inline(always)]
-    pub fn pop(&self) -> Option<SendWaker<T>> {
+    pub fn fire<F>(&self, handle: F) -> WakeResult
+    where
+        F: Fn(&WakerInner<*mut T>) -> WakeResult,
+    {
         match self {
-            RegistrySender::Single(inner) => inner.pop(),
-            RegistrySender::Multi(inner) => inner.pop(),
-            RegistrySender::Dummy(_) => None,
+            RegistrySender::Single(inner) => inner.fire(handle),
+            RegistrySender::Multi(inner) => inner.fire(handle),
+            _ => WakeResult::Next,
+        }
+    }
+
+    #[inline(always)]
+    pub fn close(&self) {
+        match self {
+            RegistrySender::Single(inner) => inner.close(),
+            RegistrySender::Multi(inner) => inner.close(),
+            _ => {}
         }
     }
 
@@ -67,17 +87,27 @@ impl<T> RegistrySender<T> {
         match self {
             RegistrySender::Single(inner) => inner.len(),
             RegistrySender::Multi(inner) => inner.len(),
-            RegistrySender::Dummy(_) => 0,
+            RegistrySender::Dummy => 0,
         }
     }
 }
 
 pub enum RegistryRecv {
-    Single(RegistrySingle<RecvWaker>),
-    Multi(RegistryMulti<RecvWaker>),
+    Single(RegistrySingle<()>),
+    Multi(RegistryMulti<()>),
 }
 
 impl RegistryRecv {
+    #[inline(always)]
+    pub fn new_single() -> Self {
+        Self::Single(RegistrySingle::<()>::new())
+    }
+
+    #[inline(always)]
+    pub fn new_multi() -> Self {
+        Self::Multi(RegistryMulti::<()>::new())
+    }
+
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         match self {
@@ -88,12 +118,7 @@ impl RegistryRecv {
 
     #[inline(always)]
     pub fn reg_waker(&self, waker: &RecvWaker) {
-        let state = waker.get_state();
-        if state == WakerState::WAKED as u8 {
-            waker.set_state(WakerState::INIT);
-        } else {
-            debug_assert_eq!(state, WakerState::INIT as u8);
-        }
+        debug_assert_eq!(waker.get_state(), WakerState::INIT as u8);
         match self {
             RegistryRecv::Single(inner) => inner.reg_waker(waker),
             RegistryRecv::Multi(inner) => inner.reg_waker(waker),
@@ -113,15 +138,30 @@ impl RegistryRecv {
     pub fn cancel_waker(&self, waker: &RecvWaker) {
         match self {
             RegistryRecv::Single(inner) => inner.cancel_waker(),
-            RegistryRecv::Multi(inner) => inner.cancel_waker(waker.get_seq()),
+            RegistryRecv::Multi(inner) => inner.clear_wakers(waker.get_seq()),
         }
     }
 
     #[inline(always)]
-    pub fn pop(&self) -> Option<RecvWaker> {
+    pub fn fire<F>(&self, handle: F)
+    where
+        F: Fn(&WakerInner<()>) -> WakeResult,
+    {
         match self {
-            RegistryRecv::Single(inner) => inner.pop(),
-            RegistryRecv::Multi(inner) => inner.pop(),
+            RegistryRecv::Single(inner) => {
+                inner.fire(handle);
+            }
+            RegistryRecv::Multi(inner) => {
+                inner.fire(handle);
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn close(&self) {
+        match self {
+            RegistryRecv::Single(inner) => inner.close(),
+            RegistryRecv::Multi(inner) => inner.close(),
         }
     }
 
@@ -134,21 +174,11 @@ impl RegistryRecv {
     }
 }
 
-/// RegistryDummy is for unbounded channel tx, which is never blocked
-pub struct RegistryDummy<W: WakerTrait>(PhantomData<W>);
-
-impl<W: WakerTrait> RegistryDummy<W> {
-    #[inline(always)]
-    pub fn new() -> Self {
-        Self(Default::default())
-    }
+pub struct RegistrySingle<P> {
+    cell: WeakCell<WakerInner<P>>,
 }
 
-pub struct RegistrySingle<W: WakerTrait> {
-    cell: WeakCell<W::Inner>,
-}
-
-impl<W: WakerTrait> RegistrySingle<W> {
+impl<P> RegistrySingle<P> {
     #[inline(always)]
     pub fn new() -> Self {
         Self { cell: WeakCell::new() }
@@ -162,7 +192,7 @@ impl<W: WakerTrait> RegistrySingle<W> {
 
     /// return is_skip
     #[inline(always)]
-    fn reg_waker(&self, waker: &W) {
+    fn reg_waker(&self, waker: &ChannelWaker<P>) {
         self.cell.put(waker.weak());
     }
 
@@ -179,11 +209,24 @@ impl<W: WakerTrait> RegistrySingle<W> {
     }
 
     #[inline(always)]
-    fn pop(&self) -> Option<W> {
-        if let Some(w) = self.cell.pop() {
-            Some(W::from_arc(w))
+    fn fire<F>(&self, mut handle: F) -> WakeResult
+    where
+        F: FnMut(&WakerInner<P>) -> WakeResult,
+    {
+        if let Some(inner) = self.cell.pop() {
+            let r = handle(&inner);
+            if r == WakeResult::PushBack {
+                self.cell.put(Arc::downgrade(&inner));
+            }
+            return r;
         } else {
-            None
+            return WakeResult::Next;
+        }
+    }
+
+    fn close(&self) {
+        if let Some(inner) = self.cell.pop() {
+            let _ = inner.close_wake();
         }
     }
 
@@ -198,23 +241,21 @@ impl<W: WakerTrait> RegistrySingle<W> {
     }
 }
 
-struct RegistryMultiInner<W: WakerTrait> {
-    queue: VecDeque<Weak<W::Inner>>,
+struct RegistryMultiInner<P> {
+    queue: VecDeque<Weak<WakerInner<P>>>,
     seq: usize,
 }
 
-pub struct RegistryMulti<W: WakerTrait> {
-    checking: AtomicBool,
+pub struct RegistryMulti<P> {
     is_empty: AtomicBool,
-    inner: Spinlock<RegistryMultiInner<W>>,
+    inner: Spinlock<RegistryMultiInner<P>>,
 }
 
-impl<W: WakerTrait> RegistryMulti<W> {
+impl<P> RegistryMulti<P> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
             inner: Spinlock::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
-            checking: AtomicBool::new(false),
             is_empty: AtomicBool::new(true),
         }
     }
@@ -225,7 +266,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
     }
 
     #[inline(always)]
-    fn reg_waker(&self, waker: &W) {
+    fn reg_waker(&self, waker: &ChannelWaker<P>) {
         let weak = waker.weak();
         let mut guard = self.inner.lock();
         let seq = guard.seq.wrapping_add(1);
@@ -237,48 +278,101 @@ impl<W: WakerTrait> RegistryMulti<W> {
         guard.queue.push_back(weak);
     }
 
-    /// This function only clears one
-    #[inline(always)]
-    fn cancel_waker(&self, seq: usize) {
-        if let Some(w) = self.pop() {
-            w.try_to_clear(seq);
-        }
-    }
-
-    /// Call when ReceiveFuture is cancelled.
-    /// to clear the LockedWakerRef which has been sent to the other side.
+    /// Call when waker is cancelled
     #[inline(always)]
     fn clear_wakers(&self, seq: usize) {
-        if self.checking.swap(true, Ordering::SeqCst) {
-            // Other thread is cleaning
+        if self.is_empty.load(Ordering::SeqCst) {
             return;
         }
-        while let Some(w) = self.pop() {
-            if w.try_to_clear(seq) {
-                // we do not known push back may have concurrent problem
-                break;
+        let mut guard = self.inner.lock();
+        macro_rules! process {
+            ($weak: expr) => {{
+                if let Some(waker) = $weak.upgrade() {
+                    let _seq = waker.get_seq();
+                    if _seq > seq {
+                        guard.queue.push_front($weak);
+                        return;
+                    } else if _seq < seq {
+                        let _ = waker.wake();
+                    } else {
+                        if guard.queue.is_empty() {
+                            self.is_empty.store(true, Ordering::SeqCst);
+                        }
+                        return;
+                    }
+                }
+            }};
+        }
+        if let Some(weak) = guard.queue.pop_front() {
+            process!(weak);
+            loop {
+                if let Some(weak) = guard.queue.pop_front() {
+                    process!(weak);
+                } else {
+                    self.is_empty.store(true, Ordering::SeqCst);
+                    return;
+                }
             }
         }
-        self.checking.store(false, Ordering::Release);
     }
 
     #[inline(always)]
-    fn pop(&self) -> Option<W> {
+    fn close(&self) {
         if self.is_empty.load(Ordering::SeqCst) {
-            return None;
+            return;
         }
-        let mut waker: Option<W> = None;
         let mut guard = self.inner.lock();
         while let Some(weak) = guard.queue.pop_front() {
-            if let Some(_waker) = weak.upgrade() {
-                waker = Some(W::from_arc(_waker));
-                break;
+            if let Some(waker) = weak.upgrade() {
+                waker.close_wake();
             }
         }
-        if guard.queue.is_empty() {
-            self.is_empty.store(true, Ordering::SeqCst);
+        self.is_empty.store(true, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    fn fire<F>(&self, handle: F) -> WakeResult
+    where
+        F: Fn(&WakerInner<P>) -> WakeResult,
+    {
+        if self.is_empty.load(Ordering::SeqCst) {
+            return WakeResult::Next;
         }
-        return waker;
+        let mut guard = self.inner.lock();
+        macro_rules! process {
+            ($weak: expr) => {{
+                if let Some(waker) = $weak.upgrade() {
+                    let r = handle(&waker);
+                    match r {
+                        WakeResult::Sent | WakeResult::Waked => {
+                            if guard.queue.is_empty() {
+                                self.is_empty.store(true, Ordering::SeqCst);
+                            }
+                            return r;
+                        }
+                        WakeResult::PushBack=>{
+                            // We are still locked, is_empty is still false, it's safe to put back the waker
+                            guard.queue.push_front($weak);
+                            return r;
+                        }
+                        _=>{},
+                    }
+                }
+            }};
+        }
+
+        if let Some(weak) = guard.queue.pop_front() {
+            process!(weak);
+            loop {
+                if let Some(weak) = guard.queue.pop_front() {
+                    process!(weak);
+                } else {
+                    self.is_empty.store(true, Ordering::SeqCst);
+                    return WakeResult::Next;
+                }
+            }
+        }
+        return WakeResult::Next;
     }
 
     /// return waker queue size
@@ -316,13 +410,13 @@ mod tests {
         assert_eq!(waker2.is_waked(), false);
 
         if let Some(w) = reg.pop() {
-            assert!(w.wake_simple().is_ok());
+            assert!(w.wake().is_ok());
         }
         assert_eq!(waker1.is_waked(), true);
         assert_eq!(reg.len(), 1);
         assert_eq!(reg.is_empty(), false);
         if let Some(w) = reg.pop() {
-            assert!(w.wake_simple().is_ok());
+            assert!(w.wake().is_ok());
         }
         assert_eq!(waker2.is_waked(), true);
         assert_eq!(reg.len(), 0);

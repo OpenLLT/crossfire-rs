@@ -229,7 +229,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     // Normally only selection or multiplex future will get here.
                     // No need to reg again, since waker is not consumed.
                     (state, *o_waker) = shared.sender_try_again_async(o_waker.take().unwrap(), ctx);
-                    if state == WakerState::WAITING as u8 {
+                    if state < WakerState::WAKED as u8 {
                         return Poll::Pending;
                     }
                 }
@@ -267,19 +267,18 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 backoff.replace(_backoff);
             }
             let waker = if let Some(w) = o_waker.take() {
-                w.set_ptr(std::ptr::null_mut());
+                w.set_state(WakerState::INIT);
                 w.check_waker_nolock(ctx);
                 w
             } else {
-                SendWaker::new_async(ctx)
+                SendWaker::<T>::new_async(ctx, std::ptr::null_mut())
             };
-            (state, _waker) = shared.sender_reg_and_try(item, waker);
+            (state, _waker) = shared.sender_reg_and_try(
+                item,
+                waker,
+                if sink { SenderMode::Sink } else { SenderMode::Normal },
+            );
             *o_waker = _waker;
-            if state < WakerState::WAKED as u8 {
-                if let Some(_backoff) = backoff.as_mut() {
-                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), _backoff);
-                }
-            }
             if state < WakerState::WAKED as u8 {
                 return Poll::Pending;
             } else if state > WakerState::WAKED as u8 {
