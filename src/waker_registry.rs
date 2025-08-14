@@ -89,19 +89,17 @@ impl RegistryRecv {
     }
 
     #[inline(always)]
-    pub fn reg_waker(&self, waker: &RecvWaker) -> Result<(), u8> {
+    pub fn reg_waker(&self, waker: &RecvWaker) {
         let state = waker.get_state();
         if state == WakerState::WAKED as u8 {
             waker.set_state(WakerState::INIT);
         } else {
-            // Might be WAITING
-            return Err(state);
+            debug_assert_eq!(state, WakerState::INIT as u8);
         }
         match self {
             RegistryRecv::Single(inner) => inner.reg_waker(waker),
             RegistryRecv::Multi(inner) => inner.reg_waker(waker),
         }
-        Ok(())
     }
 
     #[inline(always)]
@@ -307,8 +305,8 @@ mod tests {
         // test push
         let waker1 = RecvWaker::new_blocking();
         assert_eq!(reg.is_empty(), true);
-        assert_eq!(waker1.get_state(), WakerState::WAKED as u8);
-        reg.reg_waker(&waker1).expect("reg");
+        waker1.set_state(WakerState::WAKED);
+        reg.reg_waker(&waker1);
         assert_eq!(waker1.get_state(), WakerState::INIT as u8);
         assert!(waker1.get_seq() > 0);
         assert_eq!(reg.is_empty(), false);
@@ -316,7 +314,7 @@ mod tests {
         assert_eq!(waker1.is_waked(), false);
 
         let waker2 = RecvWaker::new_blocking();
-        reg.reg_waker(&waker2).expect("reg");
+        reg.reg_waker(&waker2);
         assert_eq!(reg.len(), 2);
         assert_eq!(waker2.get_seq(), waker1.get_seq() + 1);
         assert_eq!(waker2.is_waked(), false);
@@ -337,13 +335,13 @@ mod tests {
         // test seq
 
         let waker3 = RecvWaker::new_blocking();
-        reg.reg_waker(&waker3).expect("reg");
+        reg.reg_waker(&waker3);
         let waker4 = RecvWaker::new_blocking();
-        reg.reg_waker(&waker4).expect("reg");
+        reg.reg_waker(&waker4);
         waker4.set_state(WakerState::WAITING);
         for _ in 0..10 {
             let _waker = RecvWaker::new_blocking();
-            reg.reg_waker(&_waker).expect("reg");
+            reg.reg_waker(&_waker);
         }
         assert_eq!(reg.len(), 12);
         assert_eq!(waker4.abandon(), WakerState::CLOSED as u8);

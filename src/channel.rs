@@ -191,7 +191,7 @@ impl<T> ChannelShared<T> {
 
     /// Register waker for current rx
     #[inline(always)]
-    pub(crate) fn reg_recv(&self, o_waker: &RecvWaker) -> Result<(), u8> {
+    pub(crate) fn reg_recv(&self, o_waker: &RecvWaker) {
         self.recvs.reg_waker(o_waker)
     }
 
