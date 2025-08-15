@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicI8, Ordering},
+    atomic::{AtomicU32, Ordering},
     Arc,
 };
 use std::task::{Context, Poll};
@@ -59,7 +59,7 @@ pub struct AsyncRx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    backoff: AtomicI8,
+    backoff: AtomicU32,
 }
 
 unsafe impl<T: Send> Send for AsyncRx<T> {}
@@ -92,17 +92,20 @@ impl<T> From<Rx<T>> for AsyncRx<T> {
 impl<T> AsyncRx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default(), backoff: AtomicI8::new(-1) }
+        Self { shared, _phan: Default::default(), backoff: AtomicU32::new(0) }
     }
 
     #[inline(always)]
-    pub(crate) fn _detect_runtime(&self) -> u16 {
-        let mut backoff = self.backoff.load(Ordering::Relaxed);
-        if backoff < 0 {
-            backoff = self.shared.detect_async_backoff_rx();
-            self.backoff.store(backoff, Ordering::Release);
+    pub(crate) fn get_backoff_cfg(&self) -> BackoffConfig {
+        let backoff = self.backoff.load(Ordering::Relaxed);
+        if backoff == 0 {
+            let backoff_limit = self.shared.detect_async_backoff_rx();
+            let config = BackoffConfig { spin_limit: SPIN_LIMIT, limit: backoff_limit };
+            self.backoff.store(config.to_u32(), Ordering::Release);
+            return config;
+        } else {
+            return BackoffConfig::from_u32(backoff);
         }
-        return backoff as u16;
     }
 
     /// Receive message, will await when channel is empty.
@@ -220,12 +223,11 @@ impl<T> AsyncRx<T> {
         } else {
             // First call
             try_recv!();
-            let backoff_limit = self._detect_runtime();
-            if backoff_limit > 0 {
-                let config = BackoffConfig { spin_limit: 6, limit: backoff_limit };
-                let mut backoff = Backoff::new(config);
+            let cfg = self.get_backoff_cfg();
+            if cfg.limit > 0 {
+                let mut backoff = Backoff::new(cfg);
                 loop {
-                    backoff.snooze();
+                    backoff.spin();
                     try_recv!();
                     if backoff.is_completed() {
                         break;
