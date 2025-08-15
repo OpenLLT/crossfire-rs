@@ -20,6 +20,7 @@ pub fn detect_default_backoff() {
     if thread::available_parallelism().unwrap_or(NonZero::new(1).unwrap())
         == NonZero::new(1).unwrap()
     {
+        // For one core (like VM machine), better use yield_now instead of spin_loop.
         DEFAULT_CONFIG.store(
             BackoffConfig { spin_limit: 0, limit: DEFAULT_LIMIT }.to_u32(),
             Ordering::Release,
