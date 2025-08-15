@@ -9,7 +9,7 @@ use std::mem::{needs_drop, MaybeUninit};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicI8, Ordering},
+    atomic::{AtomicU32, Ordering},
     Arc,
 };
 use std::task::{Context, Poll};
@@ -59,7 +59,7 @@ pub struct AsyncTx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    backoff: AtomicI8,
+    backoff: AtomicU32,
 }
 
 impl<T> fmt::Debug for AsyncTx<T> {
@@ -92,17 +92,20 @@ impl<T> From<Tx<T>> for AsyncTx<T> {
 impl<T> AsyncTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default(), backoff: AtomicI8::new(-1) }
+        Self { shared, _phan: Default::default(), backoff: AtomicU32::new(0) }
     }
 
     #[inline(always)]
-    pub(crate) fn _detect_runtime(&self) -> u16 {
-        let mut backoff = self.backoff.load(Ordering::Relaxed);
-        if backoff < 0 {
-            backoff = self.shared.detect_async_backoff_tx();
-            self.backoff.store(backoff, Ordering::Release);
+    pub(crate) fn get_backoff_cfg(&self) -> BackoffConfig {
+        let backoff = self.backoff.load(Ordering::Relaxed);
+        if backoff == 0 {
+            let backoff_limit = self.shared.detect_async_backoff_tx();
+            let config = BackoffConfig { spin_limit: SPIN_LIMIT, limit: backoff_limit };
+            self.backoff.store(config.to_u32(), Ordering::Release);
+            return config;
+        } else {
+            return BackoffConfig::from_u32(backoff);
         }
-        return backoff as u16;
     }
 
     #[inline]
@@ -240,10 +243,9 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     return Poll::Ready(Ok(()));
                 }
             }
-            let backoff_limit = self._detect_runtime();
-            if backoff_limit > 0 {
-                let config = BackoffConfig { spin_limit: 6, limit: backoff_limit };
-                let mut _backoff = Backoff::new(config);
+            let cfg = self.get_backoff_cfg();
+            if cfg.limit > 0 {
+                let mut _backoff = Backoff::new(cfg);
                 loop {
                     _backoff.spin();
                     if shared.send(item) {
