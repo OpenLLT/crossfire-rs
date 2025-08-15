@@ -35,6 +35,7 @@ parking_lot = "0"
 crossbeam-channel = "0.5"
 flume = {version="0.11", features= ["async"] }
 kanal = {version="0.1"}
+async-channel = {version="2.5.0"}
 
 [features]
 default = []
@@ -67,6 +68,10 @@ harness = false
 
 [[bench]]
 name = "tokio"
+harness = false
+
+[[bench]]
+name = "async_channel"
 harness = false
 
 [[bench]]
