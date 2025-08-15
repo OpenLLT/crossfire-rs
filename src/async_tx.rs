@@ -122,6 +122,12 @@ impl<T> AsyncTx<T> {
 impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Send message. Will await when channel is full.
     ///
+    /// This function is cancellation-safe, it's ok to use with `timeout` and `select!` macro.
+    /// That means when [SendFuture] is dropped, there won't be message sent,
+    /// But the original message can not be returned due to the limitation of future API.
+    /// For timeout scenario, recommend using [AsyncTx::send_timeout()] instead,
+    /// which will return the message in [SendTimeoutError].
+    ///
     /// Returns `Ok(())` on successful.
     ///
     /// Returns Err([SendError]) when all Rx is dropped.
@@ -158,9 +164,10 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     ///
     /// Returns `Ok(())` when successful.
     ///
-    /// Returns Err([SendTimeoutError::Timeout]) when the operation timed out.
+    /// Returns Err([SendTimeoutError::Timeout]) when the operation timed out, which contains the message
+    /// failed to send.
     ///
-    /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
+    /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped, which contains the message failed to send.
     #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     #[inline]

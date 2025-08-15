@@ -15,6 +15,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [2.1.0] - 2025-08-15
+
+### Changed
+
+- Refactor to drop dependency of crossbeam-channel, the underlayering is modified version of crossbeam-queue.
+
+- Bounded channel speed receive massive boost.
+
+- AsyncTx can convert back and forth with Tx, and AsyncRx can convert back and forth with Rx.
+
+- Optimise for VM machine that only have 1 cpu.
+
+- Use MaybeUninit to optimise the moving of large blob message for bounded channel, in nearly full scenario.
+
+- Rename ReceiveFuture to RecvFuture, ReceiveTimeoutFuture to RecvTimeoutFuture.
+
+### Removed
+
+- Remove AsyncTx::send_blocking() and AsyncRx::recv_blocking(), instead, you can use type conversion into Tx/Rx.
+
 ## [2.0.26] - 2025-08-30
 
 ### Fixed

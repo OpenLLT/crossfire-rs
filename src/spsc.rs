@@ -1,6 +1,7 @@
 //! Single producer, single consumer.
 //!
-//! The optimization assumes single producer and consumer condition.
+//! The optimization assumes single producer and consumer condition, waker
+//! registration is completely lockless.
 //!
 //! **NOTE**: For SP / SC version [AsyncTx], [AsyncRx], [Tx], [Rx], is not `Clone`, and without `Sync`,
 //! Although can be moved to other thread, but not allowed to use send/recv while in Arc.

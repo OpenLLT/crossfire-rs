@@ -110,6 +110,11 @@ impl<T> AsyncRx<T> {
 
     /// Receive message, will await when channel is empty.
     ///
+    /// This function is cancellation-safe, it's ok to use with `timeout` and `select!` macro.
+    /// That means when [RecvFuture] is dropped, there won't be message received from channel.
+    ///
+    /// For timeout scenario, there's an alternative [AsyncRx::recv_timeout()].
+    ///
     /// Returns `Ok(T)` when successful.
     ///
     /// returns Err([RecvError]) when all Tx dropped.
