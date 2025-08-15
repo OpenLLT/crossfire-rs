@@ -1,6 +1,7 @@
 //! Multiple producers, single consumer.
 //!
-//! The optimization assumes single consumer condition.
+//! The optimization assumes single consumer condition, waker registration of receiver in
+//! lossless compared to `mpmc`.
 //!
 //! **NOTE**: For SP / SC version [AsyncRx], [Rx], is not `Clone`, and without `Sync`,
 //! Although can be moved to other thread, but not allowed to use send/recv while in Arc.

@@ -3,31 +3,33 @@
 
 //! # Crossfire
 //!
-//! High-performance spsc/mpsc/mpmc channels.
+//! High-performance lockless spsc/mpsc/mpmc channels.
 //!
 //! It supports async context, and bridge the gap between async and blocking context.
 //!
-//! Implemented with lockless in mind, low level is based on crossbeam-channel.
+//! Low level is based on crossbeam-queue.
 //! For the concept, please refer to [wiki](https://github.com/frostyplanet/crossfire-rs/wiki).
 //!
-//! ## Stability and versions
+//! ## Versions history
 //!
-//! Crossfire v1.0 has been released and used in production since 2022.12. Heavily tested on X86_64 and ARM.
+//! V1.0 has been released and used in production since 2022.12. Heavily tested on X86_64 and ARM.
 //!
-//! V2.0 has refactored the codebase and API at 2025.6. By removing generic types of ChannelShared object in sender and receiver,
+//! V2.0 (first release on 2025.6), refactored the codebase and API. By removing generic types of ChannelShared object in sender and receiver,
 //! it's easier to remember and code.
 //!
-//! V2.0.x branch will remain in maintenance mode. Future optimization might be in v2.x_beta
-//! version until long run tests prove to be stable.
+//! v2.1 (first release on 2025.8), replaced underlaying crossbeam-channel with crossbeam-queue,
+//! bringing massive performance boost, for both async context and blocking context.
 //!
 //! ## Performance
 //!
-//! We focus on optimization of async logic, outperforming other async capability channel
-//! implementations
-//! (flume, tokio::mpsc, etc).
+//! Being a lockless channel, crossfire outperform other async capability channel.
+//! And thanks to a lighter notification mechanism, in blocking context some cases are even
+//! better than original crossbeam-channel,
 //!
-//! Due to context switching between sleep and wake, there is a certain
-//! overhead over crossbeam-channel.
+//! Also being a lockless channel, the algorithm rely on spinning and yielding. Spinning is good on
+//! multi core system, but not friendly to single core system (like virtual machine). So we provide a function
+//! [detect_backoff_cfg()] to detect the running platform. Call it on your code initialization
+//! section, will get 2x performance boost, by replacing the backoff action with `std::thread::yield_now`.
 //!
 //! Benchmark is written in criterion framework. You can run benchmark by:
 //!
@@ -86,53 +88,71 @@
 //!
 //! </table>
 //!
-//! > **NOTE**: For SP / SC version [AsyncTx], [AsyncRx], [Tx], [Rx], is not `Clone`, and without `Sync`,
+//! For SP / SC version [AsyncTx], [AsyncRx], [Tx], [Rx], is not `Clone`, and without `Sync`,
 //! Although can be moved to other thread, but not allowed to use send/recv while in Arc. (Refer to the compile_fail
 //! examples in type document).
 //!
+//! The benifit using SP / SC API is completely lockless for waker registration, in exchange for some performance boost.
+//!
+//! Sender/receiver can use `From` trait to convert between blocking context and async context
+//! conterparts.
+//!
 //! ### Error types
 //!
-//! Error types are re-exported from crossbeam-channel:
+//! Error types are the same with crossbeam-channel:
 //!
 //! [TrySendError], [SendError], [SendTimeoutError], [TryRecvError], [RecvError], [RecvTimeoutError]
 //!
 //! ### Feature flags
 //!
-//! - `tokio`: Enable send_timeout, recv_timeout API for async context, based on `tokio`.
+//! - `tokio`: Enable send_timeout, recv_timeout API for async context, based on `tokio`. And will
+//! detect the right backoff strategy for the type of runtime (multi-threaded / current-thread).
 //!
 //! - `async_std`: Enable send_timeout, recv_timeout API for async context, base on `async-std`.
 //!
 //! ### Async compatibility
 //!
-//! Tested on tokio-1.x and async-std-1.x, by default we do not depend on any async runtime.
+//! Tested on tokio-1.x and async-std-1.x, crossfire is run time agnostic.
 //!
-//! In async context, tokio-select! or future-select! can be used. Cancellation is supported. You can combine
-//! recv() future with tokio::time::timeout.
+//! The following senario is considered:
 //!
-//! When feature "tokio" or "async_std" enable, we also provide two additional functions:
+//! * The [AsyncTx::send()] [AsyncRx:recv()] operation is **cancellation-safe** in async context,
+//! you can safely use select! macro and timeout() function in tokio/futures in combination with recv()
+//!  On cancellation, [SendFuture] and [RecvFuture] will trigget drop(), which will cleanup the state of waker,
+//! make sure no mem-leak and deadlock.
+//! But you cannot know the true result from SendFuture, since it's dropped
+//! upon cancellation, thus we suggest use [AsyncTx::send_timeout()] instead.
+//!
+//! * When feature "tokio" or "async_std" enable, we also provide two additional functions:
 //!
 //! - [send_timeout](crate::AsyncTx::send_timeout()), which will return the message failed to sent in
-//! [SendTimeoutError].
+//! [SendTimeoutError], we guarantee the result is atomic.
 //!
-//! - [recv_timeout](crate::AsyncRx::recv_timeout())
+//! - [recv_timeout](crate::AsyncRx::recv_timeout()), we guarantee the result is atomic.
 //!
-//! Unlike the possibility in Kanal race condition on future cancellation, in crossfire,
-//! message will not be operated outside the context of poll() function, message only moved to, or from the queue in async context,
-//! we can **guarantee** that no message will be lost due to the cancellation of recv(), and no spuriously send failure that message
-//! actually copied to the receiver.
+//! * Between blocking context and async context, and between different async runtime instances.
 //!
-//! While using MAsyncTx or MAsyncRx, there's memory overhead to pass along small size wakers
-//! for pending async producer or consumer. Because we aim to be lockless,
-//! when the sending/receiving futures are cancelled (like tokio::time::timeout()),
-//! might trigger immediate cleanup if non-conflict conditions are met.
-//! Otherwise will rely on lazy cleanup. (waker will be consumed by actual message send and recv).
+//! Be aware that being the only runable future in tokio runtime might result to busy polling.
+//! (future is polled before message arrive). If this situation is detected, we will yield the thread to OS to
+//! reduce meaning-less cpu consumption.
+//!
+//! * The async waker footprint.
+//!
+//! While using multi-producer and multi-consumer scenario, there's small memory overhead to pass along `Weak`
+//! reference of wakers.
+//! Because we aim to be lockless, when the sending/receiving futures are cancelled (like tokio::time::timeout()),
+//! might trigger immediate cleanup if try-lock is successful, otherwise will rely on lazy cleanup.
+//! (This won't be an issue because weak wakers will be consumed by actual message send and recv).
+//! On idle-select scenario, like notification for close, waker will be reuse as much as possible
+//! if poll() return pending.
+//!
 //!
 //! ## Usage
 //!
 //! Cargo.toml:
 //! ```toml
 //! [dependencies]
-//! crossfire = "2.0"
+//! crossfire = "2.1"
 //! ```
 //! ### Example with tokio::select!
 //!

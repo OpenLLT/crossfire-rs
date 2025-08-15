@@ -12,11 +12,17 @@ static DETECT_CONFIG: AtomicU32 =
 
 static _INIT: AtomicBool = AtomicBool::new(false);
 
-/// Detect cpu number and auto setting backoff config, which applys anytime after execution, and
-/// save the result to global atomic.
+/// Detect cpu number and auto setting backoff config.
 ///
 /// One one core system, it will be more effective (as much as 2x faster) to use yield than spinning.
-/// Cpu detection is somehow slow, you can call it manually before channel initialization.
+///
+/// The function need to be invoke manually in your initialization code, which does not interupt
+/// channel operation on other thread. By saving the result to global atomic, the effect will applys after execution.
+///
+/// The result we choose not to include this in default channel initialization code, because
+/// Cpu detection process is somehow slow for benchmark standard,
+/// and `thread::available_parallelism()` might require I/O on system files, you may not
+/// like it in sanbox scenario.
 pub fn detect_backoff_cfg() {
     if _INIT.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_err() {
         return;
