@@ -7,25 +7,26 @@ pub const SPIN_LIMIT: u16 = 6;
 pub const DEFAULT_LIMIT: u16 = 6;
 pub const MAX_LIMIT: u16 = 10;
 
-static DEFAULT_CONFIG: AtomicU32 =
+static DETECT_CONFIG: AtomicU32 =
     AtomicU32::new(BackoffConfig { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT }.to_u32());
 
-static INIT: AtomicBool = AtomicBool::new(false);
+static _INIT: AtomicBool = AtomicBool::new(false);
 
-#[inline(always)]
-pub fn detect_default_backoff() {
-    if INIT.swap(true, Ordering::Relaxed) {
+/// Detect cpu number and auto setting backoff config, which applys anytime after execution, and
+/// save the result to global atomic.
+///
+/// One one core system, it will be more effective (as much as 2x faster) to use yield than spinning.
+/// Cpu detection is somehow slow, you can call it manually before channel initialization.
+pub fn detect_backoff_cfg() {
+    if _INIT.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_err() {
         return;
     }
     if thread::available_parallelism().unwrap_or(NonZero::new(1).unwrap())
         == NonZero::new(1).unwrap()
     {
-        // For one core (like VM machine), better use yield_now instead of spin_loop.
-        DEFAULT_CONFIG.store(
-            BackoffConfig { spin_limit: 0, limit: DEFAULT_LIMIT }.to_u32(),
-            Ordering::Release,
-        );
-    }
+        let cfg = BackoffConfig { spin_limit: 0, limit: DEFAULT_LIMIT }.to_u32();
+        DETECT_CONFIG.store(cfg, Ordering::Relaxed);
+    };
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -38,7 +39,7 @@ pub struct BackoffConfig {
 impl Default for BackoffConfig {
     #[inline(always)]
     fn default() -> Self {
-        Self::from_u32(DEFAULT_CONFIG.load(Ordering::Relaxed))
+        Self::from_u32(DETECT_CONFIG.load(Ordering::Relaxed))
     }
 }
 

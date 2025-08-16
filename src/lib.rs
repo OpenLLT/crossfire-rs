@@ -199,6 +199,8 @@ mod channel;
 pub use channel::ChannelShared;
 
 mod backoff;
+pub use backoff::detect_backoff_cfg;
+
 mod collections;
 mod locked_waker;
 mod spinlock;
