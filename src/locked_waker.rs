@@ -451,12 +451,12 @@ pub struct WakerCache<T: WakerTrait>(ArcCell<T::Inner>);
 
 impl<T: WakerTrait> WakerCache<T> {
     #[inline(always)]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self(ArcCell::new())
     }
 
     #[inline(always)]
-    pub(crate) fn new_blocking(&self) -> T {
+    pub fn new_blocking(&self) -> T {
         if let Some(inner) = self.0.pop() {
             T::update_blocking_thread(&inner);
             T::reset(&inner);
@@ -466,7 +466,7 @@ impl<T: WakerTrait> WakerCache<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn push(&self, waker: T) {
+    pub fn push(&self, waker: T) {
         if waker.get_state() < WakerState::WAKED as u8 {
             return;
         }
@@ -478,7 +478,7 @@ impl<T: WakerTrait> WakerCache<T> {
 
     #[allow(dead_code)]
     #[inline(always)]
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         !self.0.exists()
     }
 }

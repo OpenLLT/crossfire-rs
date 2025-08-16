@@ -189,15 +189,13 @@ extern crate futures;
 
 mod channel;
 pub use channel::ChannelShared;
-/// collections that can be re-used
-pub mod collections;
+
+mod backoff;
+mod collections;
+mod locked_waker;
 mod spinlock;
 
-mod locked_waker;
 mod waker_registry;
-
-#[allow(dead_code)]
-mod backoff;
 
 pub mod mpmc;
 pub mod mpsc;
@@ -217,6 +215,15 @@ pub mod stream;
 
 mod crossbeam;
 pub use crossbeam::err::*;
+
+#[cfg(feature = "benchmark")]
+#[doc(hidden)]
+pub mod inner {
+    pub use crate::backoff::*;
+    pub use crate::collections::*;
+    pub use crate::locked_waker::*;
+    pub use crate::spinlock::*;
+}
 
 #[cfg(test)]
 mod tests;
