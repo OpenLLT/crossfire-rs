@@ -14,8 +14,6 @@ exclude = ["/ci/*", "/bors.toml"]
 description = "channels for async and threads"
 rust-version = "1.61"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 crossbeam-queue = "0.3.12"
 crossbeam-utils = "0.8"
@@ -41,6 +39,7 @@ async-channel = {version="2.5.0"}
 default = []
 tokio = ["dep:tokio"]
 async_std = ["dep:async-std"]
+benchmark = []
 
 [package.metadata.docs.rs]
 all-features = true
