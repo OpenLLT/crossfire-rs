@@ -189,14 +189,13 @@ extern crate futures;
 
 mod channel;
 pub use channel::ChannelShared;
-/// collections that can be re-used
-pub mod collections;
 
+mod backoff;
+pub use backoff::detect_backoff_cfg;
+
+mod collections;
 mod locked_waker;
 mod waker_registry;
-
-#[allow(dead_code)]
-mod backoff;
 
 pub mod mpmc;
 pub mod mpsc;
