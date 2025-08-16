@@ -1,72 +1,78 @@
 use crate::backoff::*;
 use std::cell::UnsafeCell;
+use std::marker::PhantomData;
 use std::mem::transmute;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Spinlock<T> {
-    inner: UnsafeCell<T>,
     lock: AtomicBool,
+    inner: UnsafeCell<T>,
 }
 
-unsafe impl<T: Sync> Sync for Spinlock<T> {}
+unsafe impl<T> Send for Spinlock<T> {}
+unsafe impl<T> Sync for Spinlock<T> {}
 
 pub struct SpinlockGuard<'a, T> {
-    inner: &'a mut T,
-    lock: &'a AtomicBool,
+    inner: &'a Spinlock<T>,
+    _phan: PhantomData<*mut ()>,
 }
 
 impl<'a, T> Deref for SpinlockGuard<'a, T> {
     type Target = T;
 
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        unsafe { transmute(self.inner.inner.get()) }
     }
 }
 
 impl<'a, T> DerefMut for SpinlockGuard<'a, T> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-impl<'a, T> AsRef<T> for SpinlockGuard<'a, T> {
-    fn as_ref(&self) -> &T {
-        &self.inner
+        unsafe { transmute(self.inner.inner.get()) }
     }
 }
 
 impl<'a, T> Drop for SpinlockGuard<'a, T> {
+    #[inline(always)]
     fn drop(&mut self) {
-        // NOTE: use SeqCst to prevent atomic ordering (store) happens inside the guard scope.
-        // (issue #24)
-        self.lock.store(false, Ordering::SeqCst);
+        self.inner.lock.store(false, Ordering::Release);
     }
 }
 
 impl<T> Spinlock<T> {
     #[inline(always)]
     pub fn new(inner: T) -> Self {
-        Self { inner: UnsafeCell::new(inner), lock: AtomicBool::new(false) }
+        Self { lock: AtomicBool::new(false), inner: UnsafeCell::new(inner) }
+    }
+
+    #[inline]
+    #[cold]
+    fn lock_slow(&self) {
+        let mut backoff = Backoff::new(BackoffConfig::default());
+        loop {
+            backoff.snooze();
+            if self
+                .lock
+                .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+        }
     }
 
     #[inline(always)]
-    pub fn lock<'a>(&'a self, cfg: BackoffConfig) -> SpinlockGuard<'a, T> {
+    pub fn lock<'a>(&'a self) -> SpinlockGuard<'a, T> {
         if self
             .lock
-            .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
         {
-            let mut backoff = Backoff::new(cfg);
-            while self
-                .lock
-                .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
-                .is_err()
-            {
-                backoff.snooze();
-            }
+            return SpinlockGuard { inner: self, _phan: Default::default() };
         }
-        let inner: &mut T = unsafe { transmute(self.inner.get()) };
-        SpinlockGuard { inner, lock: &self.lock }
+        self.lock_slow();
+        SpinlockGuard { inner: self, _phan: Default::default() }
     }
 }
