@@ -1,9 +1,7 @@
 use criterion::*;
 use crossbeam_queue::{ArrayQueue, SegQueue};
-use crossbeam_utils::Backoff;
-use crossfire::collections::*;
+use crossfire::inner::*;
 use parking_lot::Mutex;
-use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -33,20 +31,20 @@ impl<T> LockedQueue<T> {
     pub fn push(&self, msg: T) {
         let mut guard = self.queue.lock();
         if guard.is_empty() {
-            self.empty.store(false, Ordering::Release);
+            self.empty.store(false, Ordering::SeqCst);
         }
         guard.push_back(msg);
     }
 
     #[inline(always)]
     pub fn pop(&self) -> Option<T> {
-        if self.empty.load(Ordering::Acquire) {
+        if self.empty.load(Ordering::SeqCst) {
             return None;
         }
         let mut guard = self.queue.lock();
         if let Some(item) = guard.pop_front() {
             if guard.len() == 0 {
-                self.empty.store(true, Ordering::Release);
+                self.empty.store(true, Ordering::SeqCst);
             }
             Some(item)
         } else {
@@ -68,8 +66,9 @@ impl<T> LockedQueue<T> {
 }
 
 pub struct SpinQueue<T> {
-    lock: AtomicBool,
-    queue: UnsafeCell<VecDeque<T>>,
+    queue: Spinlock<VecDeque<T>>,
+    empty: AtomicBool,
+    backoff: BackoffConfig,
 }
 
 unsafe impl<T> Send for SpinQueue<T> {}
@@ -77,33 +76,35 @@ unsafe impl<T> Sync for SpinQueue<T> {}
 
 impl<T> SpinQueue<T> {
     fn new(cap: usize) -> Self {
-        Self { lock: AtomicBool::new(false), queue: UnsafeCell::new(VecDeque::with_capacity(cap)) }
-    }
-
-    #[inline(always)]
-    fn get_queue(&self) -> &mut VecDeque<T> {
-        unsafe { std::mem::transmute(self.queue.get()) }
+        Self {
+            empty: AtomicBool::new(true),
+            queue: Spinlock::new(VecDeque::with_capacity(cap)),
+            backoff: BackoffConfig::default(),
+        }
     }
 
     #[inline]
     fn push(&self, msg: T) {
-        let backoff = Backoff::new();
-        while self.lock.swap(true, Ordering::SeqCst) {
-            backoff.spin();
+        let mut guard = self.queue.lock(self.backoff);
+        if guard.is_empty() {
+            self.empty.store(true, Ordering::SeqCst);
         }
-        self.get_queue().push_back(msg);
-        self.lock.store(false, Ordering::Release);
+        guard.push_back(msg);
     }
 
     #[inline]
     fn pop(&self) -> Option<T> {
-        let backoff = Backoff::new();
-        while self.lock.swap(true, Ordering::SeqCst) {
-            backoff.spin();
+        if self.empty.load(Ordering::SeqCst) {
+            return None;
         }
-        let r = self.get_queue().pop_front();
-        self.lock.store(false, Ordering::Release);
-        r
+        let mut guard = self.queue.lock(self.backoff);
+        if let Some(item) = guard.pop_front() {
+            if guard.is_empty() {
+                self.empty.store(true, Ordering::SeqCst)
+            }
+            return Some(item);
+        }
+        return None;
     }
 }
 
@@ -409,5 +410,31 @@ fn _bench_threads(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, _bench_empty, _bench_sequence, _bench_threads);
+fn _bench_waker_cache(c: &mut Criterion) {
+    let mut group = c.benchmark_group("waker_cache");
+    group.significance_level(0.1).sample_size(50);
+    group.measurement_time(Duration::from_secs(10));
+    group.throughput(Throughput::Elements(ONE_MILLION as u64));
+    group.bench_function("cache", |b| {
+        b.iter(|| {
+            let cache = WakerCache::<RecvWaker>::new();
+            for _ in 0..ONE_MILLION {
+                let waker = cache.new_blocking();
+                waker.set_state(WakerState::WAKED);
+                cache.push(waker);
+            }
+        })
+    });
+    group.bench_function("alloc", |b| {
+        b.iter(|| {
+            for _ in 0..ONE_MILLION {
+                let _waker = RecvWaker::new_blocking();
+                _waker.set_state(WakerState::WAKED);
+            }
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, _bench_empty, _bench_sequence, _bench_threads, _bench_waker_cache);
 criterion_main!(benches);

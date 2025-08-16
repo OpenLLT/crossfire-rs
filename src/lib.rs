@@ -209,11 +209,10 @@ extern crate futures;
 
 mod channel;
 pub use channel::ChannelShared;
-mod spinlock;
 
+mod spinlock;
 mod backoff;
 pub use backoff::detect_backoff_cfg;
-
 mod collections;
 mod locked_waker;
 mod waker_registry;
@@ -236,6 +235,15 @@ pub mod stream;
 
 mod crossbeam;
 pub use crossbeam::err::*;
+
+#[cfg(feature = "benchmark")]
+#[doc(hidden)]
+pub mod inner {
+    pub use crate::backoff::*;
+    pub use crate::collections::*;
+    pub use crate::locked_waker::*;
+    pub use crate::spinlock::*;
+}
 
 #[cfg(test)]
 mod tests;
