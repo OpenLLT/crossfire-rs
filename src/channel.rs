@@ -76,7 +76,6 @@ impl<T> ChannelShared<T> {
     pub(crate) fn new(
         inner: Channel<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
     ) -> Arc<Self> {
-        detect_default_backoff();
         Arc::new(Self {
             closed: AtomicBool::new(false),
             tx_count: AtomicUsize::new(1),
