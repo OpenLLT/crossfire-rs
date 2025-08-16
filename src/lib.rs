@@ -3,16 +3,16 @@
 
 //! # Crossfire
 //!
-//! High-performance spsc/mpsc/mpmc channels.
+//! High-performance lockless spsc/mpsc/mpmc channels.
 //!
 //! It supports async context, and bridge the gap between async and blocking context.
 //!
-//! Implemented with lockless in mind, low level is based on crossbeam-queue.
+//! Low level is based on crossbeam-queue.
 //! For the concept, please refer to [wiki](https://github.com/frostyplanet/crossfire-rs/wiki).
 //!
 //! ## Versions history
 //!
-//! v1.0 has been released and used in production since 2022.12. Heavily tested on X86_64 and ARM.
+//! V1.0 has been released and used in production since 2022.12. Heavily tested on X86_64 and ARM.
 //!
 //! V2.0 (first release on 2025.6), refactored the codebase and API. By removing generic types of ChannelShared object in sender and receiver,
 //! it's easier to remember and code.
@@ -22,8 +22,8 @@
 //!
 //! ## Performance
 //!
-//! Outperform other async capability channel implementations, with some cases of bounded channel even
-//! better than original crossbeam-channel.
+//! Outperform other async capability channel implementations, with some cases of bounded channel in blocking context are even
+//! better than original crossbeam-channel, thanks to a lighter notification mechanism.
 //!
 //! Benchmark is written in criterion framework. You can run benchmark by:
 //!
@@ -86,6 +86,8 @@
 //! Although can be moved to other thread, but not allowed to use send/recv while in Arc. (Refer to the compile_fail
 //! examples in type document).
 //!
+//! The benifit using SP / SC API is completely lockless for waker registration, in exchange for some performance boost.
+//!
 //! Sender/receiver can use `From` trait to convert between blocking context and async context
 //! conterparts.
 //!
@@ -114,8 +116,8 @@
 //! * The async **recv() operation is cancellation-safe** in async context,
 //! you can safely use select! macro and timeout() function in tokio/futures in combination with recv()
 //!
-//! * The async **send() operation has side-effect** (due to receiver will copy data into channel while it's
-//! sleeping). When select! macro or `timeout(send())` cancelled, it's possible that the message is already
+//! * The async **send() operation has side-effect** (due to receiver will copy pending message into channel
+//! while sender is sleeping). When select! macro or `timeout(send())` cancelled, it's possible that the message is already
 //! sent to the channel. Thus we suggest use [AsyncTx::send_timeout()] instead.
 //!
 //! * On cancellation, [SendFuture] and [RecvFuture] will trigget drop(), which will cleanup the state of waker,
@@ -129,9 +131,8 @@
 //!
 //! - [recv_timeout](crate::AsyncRx::recv_timeout()), we guarantee the result is atomic.
 //!
-//! While using multi-producer and multi-consumer scenario, there's memory overhead to pass along small size wakers
-//! for pending async producer or consumer. Because we aim to be lockless,
-//! when the sending/receiving futures are cancelled (like tokio::time::timeout()),
+//! While using multi-producer and multi-consumer scenario, there's memory overhead to pass along small size wakers.
+//! Because we aim to be lockless, when the sending/receiving futures are cancelled (like tokio::time::timeout()),
 //! might trigger immediate cleanup if non-conflict conditions are met.
 //! Otherwise will rely on lazy cleanup. (waker will be consumed by actual message send and recv).
 //!

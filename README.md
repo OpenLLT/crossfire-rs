@@ -11,30 +11,28 @@ https://docs.rs/crossfire)
 [![Rust 1.36+](https://img.shields.io/badge/rust-1.36+-lightgray.svg)](
 https://www.rust-lang.org)
 
-High-performance spsc/mpsc/mpmc channels.
+High-performance lockless spsc/mpsc/mpmc channels.
 
 It supports async context, or communicates between async-blocking context.
 
-Implemented with lockless in mind, low level is based on crossbeam-channel.
+Low level is based on crossbeam-queue.
 For the concept, please refer to [wiki](https://github.com/frostyplanet/crossfire-rs/wiki).
 
+## Versions history
 
-## Stability and versions
+V1.0 has been released and used in production since 2022.12. Heavily tested on X86_64 and ARM.
 
-Crossfire v1.0 has been released and used in production since 2022.12. Heavily tested on X86_64 and ARM.
-
-V2.0 has refactored the codebase and API at 2025.6. By removing generic types of ChannelShared object in sender and receiver,
+V2.0 (first release on 2025.6), refactored the codebase and API. By removing generic types of ChannelShared object in sender and receiver,
 it's easier to remember and code.
 
-V2.0.x branch will remain in maintenance mode. Further optimization might be in v2.x_beta
-version until long run tests prove to be stable.
+v2.1 (first release on 2025.8), replaced underlaying crossbeam-channel with crossbeam-queue, bringing massive performance
+boost, for both async context and blocking context.
+
 
 ## Performance
 
-We focus on optimization of async logic, outperforming other async capability channels in most cases.
-
-Due to context switching between sleep and wake, there is a certain
-overhead on async context over crossbeam-channel which in blocking context.
+Outperform other async capability channel implementations, with some cases of bounded channel in blocking context are even
+better than original crossbeam-channel, thanks to a lighter notification mechanism.
 
 Benchmark is written in criterion framework. You can run benchmark by:
 
@@ -101,13 +99,18 @@ The return types in these 3 modules are different:
 
 </table>
 
-> **NOTE**: For SP / SC version [AsyncTx], [AsyncRx], [Tx], [Rx], is not `Clone`, and without `Sync`,
-Although can be moved to other thread, but not allowed to use send/recv while in Arc. (Refer to the compile_fail
-examples in type document).
+For SP / SC version `AsyncTx`, `AsyncRx`, `Tx`, `Rx`, is not `Clone`, and without `Sync`,
+Although can be moved to other thread, but not allowed to use send/recv while in Arc.
+(Refer to the compile_fail examples in type document).
+
+The benifit using SP / SC API is completely lockless for waker registration, in exchange for some performance boost.
+
+Sender/receiver can use `From` trait to convert between blocking context and async context
+conterparts.
 
 ### Error types
 
-Error types are re-exported from crossbeam-channel:  `TrySendError`, `SendError`, `TryRecvError`, `RecvError`
+Error types are the same with crossbeam-channel:  `TrySendError`, `SendError`, `TryRecvError`, `RecvError`
 
 ### Feature flags
 
@@ -119,18 +122,33 @@ Error types are re-exported from crossbeam-channel:  `TrySendError`, `SendError`
 
 Tested on tokio-1.x and async-std-1.x, by default we do not depend on any async runtime.
 
-In async context, tokio-select! or future-select! can be used.  Cancelling is supported. You can combine
-recv() future with tokio::time::timeout.
+Direct-copy inspired by kanal is implemented on receiver-side (receiver will try copy message
+from parked sender into the channel). which reduce contension when the number of senders is large.
+But unlike kanal, we will not bypass the channel to copy from sender to receiver.
+
+That means:
+
+* The async **recv() operation is cancellation-safe** in async context,
+you can safely use select! macro and timeout() function in tokio/futures in combination with recv()
+
+* The async **send() operation has side-effect** (due to receiver will copy pending message into channel while sender is
+sleeping). When select! macro or `timeout(send())` cancelled, it's possible that the message is already
+sent to the channel. Thus we suggest use [AsyncTx::send_timeout()] instead.
+
+* On cancellation, [SendFuture] and [RecvFuture] will trigget drop(), which will cleanup the state of waker,
+make sure no mem-leak and deadlock. But you cannot know the true result from SendFuture, since it's dropped
+upon cancellation.
 
 When feature "tokio" or "async_std" enable, we also provide two additional functions:
 
-[send_timeout](https://docs.rs/crossfire/latest/crossfire/struct.AsyncTx.html#method.send_timeout) which will return the message failed to sent in [SendTimeoutError](https://docs.rs/crossfire/latest/crossfire/enum.SendTimeoutError.html).
+[send_timeout](https://docs.rs/crossfire/latest/crossfire/struct.AsyncTx.html#method.send_timeout)
+ which will return the message failed to sent in [SendTimeoutError](https://docs.rs/crossfire/latest/crossfire/enum.SendTimeoutError.html).
+ we guarantee the result is atomic.
 
-[recv_timeout](https://docs.rs/crossfire/latest/crossfire/struct.AsyncRx.html#method.recv_timeout)
+[recv_timeout](https://docs.rs/crossfire/latest/crossfire/struct.AsyncRx.html#method.recv_timeout). We guarantee the result is atomic.
 
-While using MAsyncTx or MAsyncRx, there's memory overhead to pass along small size wakers
-for pending async producer or consumer. Because we aim to be lockless,
-when the sending/receiving futures are cancelled (like tokio::time::timeout()),
+While using multi-producer and multi-consumer scenario, there's memory overhead to pass along small size wakers.
+Because we aim to be lockless, when the sending/receiving futures are cancelled (like tokio::time::timeout()),
 might trigger immediate cleanup if non-conflict conditions are met.
 Otherwise will rely on lazy cleanup. (waker will be consumed by actual message send and recv).
 
