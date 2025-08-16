@@ -207,6 +207,7 @@ async fn _crossfire_bounded_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>
 }
 
 fn bench_crossfire_bounded_blocking_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_blocking_1_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(10));
@@ -237,6 +238,7 @@ fn bench_crossfire_bounded_blocking_1_1(c: &mut Criterion) {
 }
 
 fn bench_crossfire_bounded_1_blocking_mpsc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_blocking_n_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -260,6 +262,7 @@ fn bench_crossfire_bounded_1_blocking_mpsc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_bounded_1_blocking_mpmc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_blocking_n_n");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -306,6 +309,7 @@ fn bench_crossfire_bounded_100_blocking_mpsc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_bounded_100_blocking_mpmc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_blocking_n_n");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -328,6 +332,7 @@ fn bench_crossfire_bounded_100_blocking_mpmc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_bounded_async_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_async_1_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(10));
@@ -358,6 +363,7 @@ fn bench_crossfire_bounded_async_1_1(c: &mut Criterion) {
 }
 
 fn bench_crossfire_bounded_1_async_mpsc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_async_n_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -383,6 +389,7 @@ fn bench_crossfire_bounded_1_async_mpsc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_bounded_1_async_mpmc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_async_n_n");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -405,6 +412,7 @@ fn bench_crossfire_bounded_1_async_mpmc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_bounded_100_async_mpsc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_async_n_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -428,6 +436,7 @@ fn bench_crossfire_bounded_100_async_mpsc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_bounded_100_async_mpmc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_async_n_n");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -451,6 +460,7 @@ fn bench_crossfire_bounded_100_async_mpmc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_unbounded_blocking_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_1_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(10));
@@ -478,6 +488,7 @@ fn bench_crossfire_unbounded_blocking_1_1(c: &mut Criterion) {
 }
 
 fn bench_crossfire_unbounded_blocking_mpsc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_n_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -506,6 +517,7 @@ fn bench_crossfire_unbounded_blocking_mpsc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_unbounded_blocking_mpmc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_n_n");
     group.significance_level(0.1).sample_size(50);
     group.measurement_time(Duration::from_secs(10));
@@ -527,6 +539,7 @@ fn bench_crossfire_unbounded_blocking_mpmc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_unbounded_async_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_async_1_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(10));
@@ -554,6 +567,7 @@ fn bench_crossfire_unbounded_async_1_1(c: &mut Criterion) {
 }
 
 fn bench_crossfire_unbounded_async_mpsc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_async_n_1");
     group.significance_level(0.1).sample_size(100);
     group.measurement_time(Duration::from_secs(20));
@@ -592,6 +606,7 @@ fn bench_crossfire_unbounded_async_mpsc(c: &mut Criterion) {
 }
 
 fn bench_crossfire_unbounded_async_mpmc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_async_n_n");
     group.significance_level(0.1).sample_size(50);
     group.measurement_time(Duration::from_secs(20));
