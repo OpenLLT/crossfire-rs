@@ -40,7 +40,7 @@ pub trait WakerTrait: Deref<Target = Self::Inner> {
 
     fn set_seq(&self, seq: usize);
 
-    fn get_state(&self) -> u8;
+    fn get_state_relaxed(&self) -> u8;
 
     fn weak(&self) -> Weak<Self::Inner>;
 
@@ -52,7 +52,7 @@ pub struct SendWaker<T>(Arc<WakerInner<AtomicPtr<T>>>);
 
 impl<T> fmt::Debug for SendWaker<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "waker({} state={})", self.get_seq(), self.get_state())
+        write!(f, "waker({} state={})", self.get_seq(), self.get_state_relaxed())
     }
 }
 
@@ -111,9 +111,9 @@ impl<T> WakerTrait for SendWaker<T> {
 
     #[inline(always)]
     fn reset(inner: &Arc<Self::Inner>) {
-        inner.state.store(WakerState::WAKED as u8, Ordering::Release);
+        inner.state.store(WakerState::WAKED as u8, Ordering::Relaxed);
         // Will reset the payload in reg_waker()
-        inner.payload.store(ptr::null_mut(), Ordering::Release);
+        inner.payload.store(ptr::null_mut(), Ordering::Relaxed);
     }
 
     #[inline(always)]
@@ -132,8 +132,8 @@ impl<T> WakerTrait for SendWaker<T> {
     }
 
     #[inline(always)]
-    fn get_state(&self) -> u8 {
-        self.0.get_state()
+    fn get_state_relaxed(&self) -> u8 {
+        self.0.get_state_relaxed()
     }
 
     #[inline(always)]
@@ -216,7 +216,7 @@ impl WakerTrait for RecvWaker {
 
     #[inline(always)]
     fn reset(inner: &Arc<Self::Inner>) {
-        inner.state.store(WakerState::INIT as u8, Ordering::Release);
+        inner.state.store(WakerState::INIT as u8, Ordering::Relaxed);
     }
 
     #[inline(always)]
@@ -235,8 +235,8 @@ impl WakerTrait for RecvWaker {
     }
 
     #[inline(always)]
-    fn get_state(&self) -> u8 {
-        self.0.get_state()
+    fn get_state_relaxed(&self) -> u8 {
+        self.0.get_state_relaxed()
     }
 
     #[inline(always)]
@@ -397,7 +397,7 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
-    fn get_state(&self) -> u8 {
+    pub fn get_state(&self) -> u8 {
         self.state.load(Ordering::Acquire)
     }
 
@@ -483,7 +483,7 @@ impl<T: WakerTrait> WakerCache<T> {
 
     #[inline(always)]
     pub fn push(&self, waker: T) {
-        if waker.get_state() < WakerState::WAKED as u8 {
+        if waker.get_state_relaxed() < WakerState::WAKED as u8 {
             return;
         }
         let a = waker.to_arc();
