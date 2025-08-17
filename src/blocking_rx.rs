@@ -84,101 +84,97 @@ impl<T> Rx<T> {
     #[inline(always)]
     pub(crate) fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<T, RecvTimeoutError> {
         let shared = &self.shared;
-        if shared.is_zero() {
-            todo!();
-        } else {
-            macro_rules! try_recv {
-                () => {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        return Ok(item);
-                    }
-                };
-                ($waker: expr) => {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        self.waker_cache.push($waker);
-                        return Ok(item);
-                    }
-                };
-            }
-            try_recv!();
-            let mut backoff = Backoff::new(BackoffConfig::default());
-            loop {
-                backoff.snooze();
-                try_recv!();
-                if backoff.is_completed() {
-                    break;
+        macro_rules! try_recv {
+            () => {
+                if let Some(item) = shared.try_recv() {
+                    shared.on_recv();
+                    return Ok(item);
                 }
+            };
+            ($waker: expr) => {
+                if let Some(item) = shared.try_recv() {
+                    shared.on_recv();
+                    self.waker_cache.push($waker);
+                    return Ok(item);
+                }
+            };
+        }
+        try_recv!();
+        let mut backoff = Backoff::new(BackoffConfig::default().limit(3));
+        loop {
+            backoff.snooze();
+            try_recv!();
+            if backoff.is_completed() {
+                break;
             }
-            let waker = self.waker_cache.new_blocking();
-            let mut state;
-            let mut item: MaybeUninit<T> = MaybeUninit::uninit();
-            'MAIN: loop {
-                shared.reg_recv(&waker);
-                if shared.is_empty() {
+        }
+        let waker = self.waker_cache.new_blocking();
+        let mut state;
+        let mut item: MaybeUninit<T> = MaybeUninit::uninit();
+        'MAIN: loop {
+            shared.reg_recv(&waker);
+            if shared.is_empty() {
+                if deadline.is_none() {
+                    waker.set_ptr(item.as_mut_ptr());
+                }
+                state = waker.commit_waiting();
+            } else {
+                if let Some(item) = shared.try_recv() {
+                    shared.on_recv();
+                    shared.recv_waker_cancel(&waker);
+                    return Ok(item);
+                } else {
                     if deadline.is_none() {
                         waker.set_ptr(item.as_mut_ptr());
                     }
                     state = waker.commit_waiting();
-                } else {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        shared.recv_waker_cancel(&waker);
-                        return Ok(item);
-                    } else {
-                        if deadline.is_none() {
-                            waker.set_ptr(item.as_mut_ptr());
-                        }
-                        state = waker.commit_waiting();
-                    }
-                }
-                while state == WakerState::WAITING as u8 {
-                    if shared.is_disconnected() {
-                        break 'MAIN;
-                    }
-                    match check_timeout(deadline) {
-                        Ok(None) => {
-                            std::thread::park();
-                        }
-                        Ok(Some(dur)) => {
-                            std::thread::park_timeout(dur);
-                        }
-                        Err(_) => {
-                            if shared.abandon_recv_waker(waker) {
-                                return Err(RecvTimeoutError::Timeout);
-                            } else {
-                                // state is WakerState::DONE
-                                return Ok(unsafe { item.assume_init_read() });
-                            }
-                        }
-                    }
-                    state = waker.get_state();
-                }
-                if state == WakerState::COPY as u8 {
-                    state = waker.wait_copying(&mut backoff);
-                    debug_assert_eq!(state, WakerState::DONE as u8);
-                }
-                if state == WakerState::DONE as u8 {
-                    self.waker_cache.push(waker);
-                    return Ok(unsafe { item.assume_init_read() });
-                } else if state == WakerState::CLOSED as u8 {
-                    break 'MAIN;
-                }
-                backoff.reset();
-                // Waited due to park_timeout or spurious waked
-                loop {
-                    try_recv!(waker);
-                    if backoff.is_completed() {
-                        break;
-                    }
-                    backoff.snooze();
                 }
             }
-            try_recv!(waker);
-            // make sure all msgs received, since we have soonze
-            return Err(RecvTimeoutError::Disconnected);
+            while state == WakerState::WAITING as u8 {
+                if shared.is_disconnected() {
+                    break 'MAIN;
+                }
+                match check_timeout(deadline) {
+                    Ok(None) => {
+                        std::thread::park();
+                    }
+                    Ok(Some(dur)) => {
+                        std::thread::park_timeout(dur);
+                    }
+                    Err(_) => {
+                        if shared.abandon_recv_waker(waker) {
+                            return Err(RecvTimeoutError::Timeout);
+                        } else {
+                            // state is WakerState::DONE
+                            return Ok(unsafe { item.assume_init_read() });
+                        }
+                    }
+                }
+                state = waker.get_state();
+            }
+            if state == WakerState::COPY as u8 {
+                state = waker.wait_copying(&mut backoff);
+                debug_assert_eq!(state, WakerState::DONE as u8);
+            }
+            if state == WakerState::DONE as u8 {
+                self.waker_cache.push(waker);
+                return Ok(unsafe { item.assume_init_read() });
+            } else if state == WakerState::CLOSED as u8 {
+                break 'MAIN;
+            }
+            backoff.reset();
+            // Waited due to park_timeout or spurious waked
+            loop {
+                try_recv!(waker);
+                if backoff.is_completed() {
+                    break;
+                }
+                backoff.snooze();
+            }
         }
+        try_recv!(waker);
+        // make sure all msgs received, since we have soonze
+        return Err(RecvTimeoutError::Disconnected);
     }
 
     /// Receive message, will block when channel is empty.
