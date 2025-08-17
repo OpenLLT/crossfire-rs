@@ -145,7 +145,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns Err([TrySendError::Full]) on channel full for bounded channel.
     ///
     /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
-    #[inline]
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
         if self.shared.is_disconnected() {
             return Err(TrySendError::Disconnected(item));

@@ -201,8 +201,6 @@ impl<T: Send + 'static> Tx<T> {
     /// Returns `Ok(())` on successful.
     ///
     /// Returns Err([SendError]) when all Rx is dropped.
-    ///
-    #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
         match self._send_blocking(item, None) {
             Ok(_) => return Ok(()),
@@ -218,7 +216,6 @@ impl<T: Send + 'static> Tx<T> {
     /// Returns Err([TrySendError::Full]) on channel full for bounded channel.
     ///
     /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
-    #[inline]
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
         let shared = &self.shared;
         if shared.is_disconnected() {

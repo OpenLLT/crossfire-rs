@@ -166,7 +166,6 @@ impl<T> Rx<T> {
     /// Returns Ok(T) when successful.
     ///
     /// Returns Err([RecvError]) when all Tx dropped.
-    #[inline]
     pub fn recv<'a>(&'a self) -> Result<T, RecvError> {
         self._recv_blocking(None).map_err(|err| match err {
             RecvTimeoutError::Disconnected => RecvError,
@@ -181,7 +180,6 @@ impl<T> Rx<T> {
     /// Returns Err([TryRecvError::Empty]) when channel is empty.
     ///
     /// returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
-    #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         if self.shared.is_zero() {
             todo!();
@@ -209,7 +207,6 @@ impl<T> Rx<T> {
     /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
     ///
     /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped and channel is empty.
-    #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => self._recv_blocking(Some(deadline)),

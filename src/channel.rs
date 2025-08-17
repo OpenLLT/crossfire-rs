@@ -443,7 +443,7 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline]
-    pub fn detect_async_backoff_tx(&self) -> u16 {
+    pub(crate) fn detect_async_backoff_tx(&self) -> u16 {
         // Async parameter is determine by runtime,
         // like tokio you might have multiple runtime. So the result should stored in
         // sender and receivers, not in the ChannelShared
@@ -462,7 +462,7 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline]
-    pub fn detect_async_backoff_rx(&self) -> u16 {
+    pub(crate) fn detect_async_backoff_rx(&self) -> u16 {
         // Async parameter is determine by runtime,
         // like tokio you might have multiple runtime. So the result should stored in
         // sender and receivers, not in the ChannelShared

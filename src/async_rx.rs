@@ -153,7 +153,6 @@ impl<T> AsyncRx<T> {
     /// Returns Err([TryRecvError::Empty]) when channel is empty.
     ///
     /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
-    #[inline(always)]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         if let Some(item) = self.shared.try_recv() {
             self.shared.on_recv();
