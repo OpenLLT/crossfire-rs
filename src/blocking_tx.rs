@@ -93,128 +93,122 @@ impl<T: Send + 'static> Tx<T> {
         &self, item: T, deadline: Option<Instant>,
     ) -> Result<(), SendTimeoutError<T>> {
         let shared = &self.shared;
-        if shared.is_disconnected() {
-            return Err(SendTimeoutError::Disconnected(item));
-        }
-        if shared.is_zero() {
-            todo!();
+        let mut _item = MaybeUninit::new(item);
+        let o_recv_waker = self.shared.recvs.pop();
+        if let Some(waker) = o_recv_waker.as_ref() {
+            if waker.copy(&_item) {
+                return Ok(());
+            }
+            if shared.send(&_item) {
+                Self::_on_send(shared, o_recv_waker);
+                return Ok(());
+            }
+            let _ = waker.wake_simple();
         } else {
-            let mut _item = MaybeUninit::new(item);
-            let o_recv_waker = self.shared.recvs.pop();
-            if let Some(waker) = o_recv_waker.as_ref() {
-                if waker.copy(&_item) {
-                    return Ok(());
+            if shared.is_disconnected() {
+                return Err(SendTimeoutError::Disconnected(unsafe { _item.assume_init_read() }));
+            }
+            if shared.send(&_item) {
+                shared.on_send();
+                return Ok(());
+            }
+        }
+        let mut o_waker: Option<SendWaker<T>> = None;
+        let mut state: u8;
+        let mut backoff = Backoff::new(BackoffConfig::default().spin(2));
+        let fastpath = shared.senders.not_congest();
+        macro_rules! return_ok {
+            ($waker: expr) => {
+                if let Some(waker) = $waker.take() {
+                    self.waker_cache.push(waker);
                 }
-                if shared.send(&_item) {
-                    Self::_on_send(shared, o_recv_waker);
-                    return Ok(());
+                if shared.is_full() {
+                    // It's for 8x1, 16x1.
+                    std::thread::yield_now();
                 }
-                let _ = waker.wake_simple();
-            } else {
+                return Ok(())
+            };
+            () => {
+                if !fastpath {
+                    // It's for nx1, congestion need more yield to receiver.
+                    std::thread::yield_now();
+                }
+                return Ok(())
+            };
+        }
+        if fastpath {
+            while !backoff.is_completed() {
+                backoff.snooze();
                 if shared.send(&_item) {
                     shared.on_send();
-                    return Ok(());
+                    return_ok!();
                 }
             }
-            let mut o_waker: Option<SendWaker<T>> = None;
-            let mut state: u8;
-            let mut backoff = Backoff::new(BackoffConfig::default().spin(2));
-            let fastpath = shared.senders.not_congest();
-            macro_rules! return_ok {
-                ($waker: expr) => {
-                    if let Some(waker) = $waker.take() {
-                        self.waker_cache.push(waker);
-                    }
-                    if shared.is_full() {
-                        // It's for 8x1, 16x1.
-                        std::thread::yield_now();
-                    }
-                    return Ok(())
-                };
-                () => {
-                    if !fastpath {
-                        // It's for nx1, congestion need more yield to receiver.
-                        std::thread::yield_now();
-                    }
-                    return Ok(())
-                };
-            }
-            if fastpath {
-                while !backoff.is_completed() {
-                    backoff.snooze();
-                    if shared.send(&_item) {
+        } else {
+            while !backoff.is_completed() {
+                backoff.yield_now();
+                match shared.try_send_oneshot(&_item) {
+                    Some(true) => {
                         shared.on_send();
                         return_ok!();
                     }
-                }
-            } else {
-                while !backoff.is_completed() {
-                    backoff.yield_now();
-                    match shared.try_send_oneshot(&_item) {
-                        Some(true) => {
-                            shared.on_send();
-                            return_ok!();
-                        }
-                        Some(false) => break,
-                        None => {}
-                    }
+                    Some(false) => break,
+                    None => {}
                 }
             }
-            loop {
-                let waker = if let Some(w) = o_waker.take() {
-                    w
-                } else {
-                    let w = self.waker_cache.new_blocking();
-                    w
-                };
-                // For nx1 (more likely congest), need to reset backoff
-                // to allow more yield to receivers.
-                // For nxn (the backoff is already complete), wait a little bit.
-                (state, o_waker) = shared.sender_reg_and_try(&mut _item, waker);
-                while state < WakerState::WAKED as u8 {
-                    backoff.reset();
-                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
-                    if state == WakerState::WAITING as u8 {
-                        match check_timeout(deadline) {
-                            Ok(None) => {
-                                std::thread::park();
-                            }
-                            Ok(Some(dur)) => {
-                                std::thread::park_timeout(dur);
-                            }
-                            Err(_) => {
-                                if shared.abandon_send_waker(o_waker.take().unwrap()) {
-                                    return Err(SendTimeoutError::Timeout(unsafe {
-                                        _item.assume_init_read()
-                                    }));
-                                } else {
-                                    // state is WakerState::DONE
-                                    return Ok(());
-                                }
+        }
+        loop {
+            let waker = if let Some(w) = o_waker.take() {
+                w
+            } else {
+                let w = self.waker_cache.new_blocking();
+                w
+            };
+            // For nx1 (more likely congest), need to reset backoff
+            // to allow more yield to receivers.
+            // For nxn (the backoff is already complete), wait a little bit.
+            (state, o_waker) = shared.sender_reg_and_try(&mut _item, waker);
+            while state < WakerState::WAKED as u8 {
+                backoff.reset();
+                state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
+                if state == WakerState::WAITING as u8 {
+                    match check_timeout(deadline) {
+                        Ok(None) => {
+                            std::thread::park();
+                        }
+                        Ok(Some(dur)) => {
+                            std::thread::park_timeout(dur);
+                        }
+                        Err(_) => {
+                            if shared.abandon_send_waker(o_waker.take().unwrap()) {
+                                return Err(SendTimeoutError::Timeout(unsafe {
+                                    _item.assume_init_read()
+                                }));
+                            } else {
+                                // state is WakerState::DONE
+                                return Ok(());
                             }
                         }
                     }
-                    state = o_waker.as_ref().unwrap().get_state();
                 }
-                if state == WakerState::DONE as u8 {
-                    return_ok!(o_waker);
-                } else if state == WakerState::WAKED as u8 {
-                    backoff.reset();
-                    loop {
-                        if shared.send(&_item) {
-                            shared.on_send();
-                            return_ok!(o_waker);
-                        }
-                        if backoff.is_completed() {
-                            break;
-                        }
-                        backoff.snooze();
+                state = o_waker.as_ref().unwrap().get_state();
+            }
+            if state == WakerState::DONE as u8 {
+                return_ok!(o_waker);
+            } else if state == WakerState::WAKED as u8 {
+                backoff.reset();
+                loop {
+                    if shared.send(&_item) {
+                        shared.on_send();
+                        return_ok!(o_waker);
                     }
-                } else if state == WakerState::CLOSED as u8 {
-                    return Err(SendTimeoutError::Disconnected(unsafe {
-                        _item.assume_init_read()
-                    }));
+                    if backoff.is_completed() {
+                        break;
+                    }
+                    backoff.snooze();
                 }
+            } else if state == WakerState::CLOSED as u8 {
+                return Err(SendTimeoutError::Disconnected(unsafe { _item.assume_init_read() }));
             }
         }
     }
