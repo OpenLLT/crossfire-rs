@@ -217,7 +217,7 @@ impl<T> AsyncRx<T> {
             } else if state == WakerState::WAKED as u8 {
                 waker.check_waker_nolock(ctx);
             } else if state == WakerState::CLOSED as u8 {
-                try_recv!();
+                try_recv!(waker);
                 return Err(TryRecvError::Disconnected);
             }
         } else {
@@ -251,7 +251,7 @@ impl<T> AsyncRx<T> {
         }
         _waker.commit_waiting();
         if shared.is_disconnected() {
-            try_recv!();
+            try_recv!(_waker);
             return Err(TryRecvError::Disconnected);
         }
         return Err(TryRecvError::Empty);
