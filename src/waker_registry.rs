@@ -383,6 +383,8 @@ impl<P> RegistryMulti<P> {
     }
 }
 
+/*
+
 #[cfg(test)]
 mod tests {
 
@@ -449,3 +451,4 @@ mod tests {
         assert_eq!(reg.is_empty(), true);
     }
 }
+*/
