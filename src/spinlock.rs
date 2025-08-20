@@ -41,38 +41,51 @@ impl<'a, T> Drop for SpinlockGuard<'a, T> {
     }
 }
 
+macro_rules! try_lock {
+    ($self: expr) => {
+        $self.lock.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+    };
+}
+
 impl<T> Spinlock<T> {
     #[inline(always)]
     pub fn new(inner: T) -> Self {
         Self { lock: AtomicBool::new(false), inner: UnsafeCell::new(inner) }
     }
 
-    #[inline]
-    #[cold]
-    fn lock_slow(&self) {
-        let mut backoff = Backoff::new(BackoffConfig::default());
+    #[inline(always)]
+    fn guard<'a>(&'a self) -> SpinlockGuard<'a, T> {
+        return SpinlockGuard { inner: self, _phan: Default::default() };
+    }
+
+    #[inline(always)]
+    pub fn lock<'a>(&'a self) -> SpinlockGuard<'a, T> {
+        if try_lock!(self).is_ok() {
+            return self.guard();
+        }
+        let mut backoff = Backoff::new(BackoffConfig::default().limit(SPIN_LIMIT + 1));
         loop {
             backoff.snooze();
-            if self
-                .lock
-                .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                return;
+            if try_lock!(self).is_ok() {
+                return self.guard();
             }
         }
     }
 
     #[inline(always)]
-    pub fn lock<'a>(&'a self) -> SpinlockGuard<'a, T> {
-        if self
-            .lock
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-        {
-            return SpinlockGuard { inner: self, _phan: Default::default() };
+    pub fn lock_condition<'a>(&'a self, skip: &AtomicBool) -> Option<SpinlockGuard<'a, T>> {
+        if try_lock!(self).is_ok() {
+            return Some(self.guard());
         }
-        self.lock_slow();
-        SpinlockGuard { inner: self, _phan: Default::default() }
+        let mut backoff = Backoff::new(BackoffConfig::default());
+        loop {
+            backoff.snooze();
+            if try_lock!(self).is_ok() {
+                return Some(self.guard());
+            }
+            if skip.load(Ordering::SeqCst) {
+                return None;
+            }
+        }
     }
 }

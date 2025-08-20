@@ -284,33 +284,45 @@ impl<P> RegistryMulti<P> {
         if self.is_empty.load(Ordering::SeqCst) {
             return;
         }
-        let mut guard = self.inner.lock();
-        macro_rules! process {
-            ($weak: expr) => {{
-                if let Some(waker) = $weak.upgrade() {
-                    let _seq = waker.get_seq();
-                    if _seq > seq {
-                        guard.queue.push_front($weak);
-                        return;
-                    } else if _seq < seq {
-                        let _ = waker.wake();
-                    } else {
-                        if guard.queue.is_empty() {
-                            self.is_empty.store(true, Ordering::SeqCst);
+        if let Some(mut guard) = self.inner.lock_condition(&self.is_empty) {
+            macro_rules! process {
+                ($weak: expr) => {{
+                    if let Some(waker) = $weak.upgrade() {
+                        let _seq = waker.get_seq();
+                        if _seq == seq {
+                            true
+                        } else {
+                            // There might be later waker cancel due to success sending before commit_waiting.
+                            // While earlier waker is still waiting.
+                            if waker.get_state_strict() < WakerState::WAKED as u8 {
+                                guard.queue.push_front($weak);
+                                return;
+                            }
+                            true
                         }
+                    } else {
+                        false
+                    }
+                }};
+            }
+            if let Some(weak) = guard.queue.pop_front() {
+                if process!(weak) {
+                    if guard.queue.is_empty() {
+                        self.is_empty.store(true, Ordering::SeqCst);
+                    }
+                    return;
+                }
+                loop {
+                    if let Some(weak) = guard.queue.pop_front() {
+                        if process!(weak) {
+                            if guard.queue.is_empty() {
+                                self.is_empty.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    } else {
+                        self.is_empty.store(true, Ordering::SeqCst);
                         return;
                     }
-                }
-            }};
-        }
-        if let Some(weak) = guard.queue.pop_front() {
-            process!(weak);
-            loop {
-                if let Some(weak) = guard.queue.pop_front() {
-                    process!(weak);
-                } else {
-                    self.is_empty.store(true, Ordering::SeqCst);
-                    return;
                 }
             }
         }
@@ -338,37 +350,38 @@ impl<P> RegistryMulti<P> {
         if self.is_empty.load(Ordering::SeqCst) {
             return WakeResult::Next;
         }
-        let mut guard = self.inner.lock();
-        macro_rules! process {
-            ($weak: expr) => {{
-                if let Some(waker) = $weak.upgrade() {
-                    let r = handle(&waker);
-                    match r {
-                        WakeResult::Sent | WakeResult::Waked => {
-                            if guard.queue.is_empty() {
-                                self.is_empty.store(true, Ordering::SeqCst);
+        if let Some(mut guard) = self.inner.lock_condition(&self.is_empty) {
+            macro_rules! process {
+                ($weak: expr) => {{
+                    if let Some(waker) = $weak.upgrade() {
+                        let r = handle(&waker);
+                        match r {
+                            WakeResult::Sent | WakeResult::Waked => {
+                                if guard.queue.is_empty() {
+                                    self.is_empty.store(true, Ordering::SeqCst);
+                                }
+                                return r;
                             }
-                            return r;
+                            WakeResult::PushBack=>{
+                                // We are still locked, is_empty is still false, it's safe to put back the waker
+                                guard.queue.push_front($weak);
+                                return r;
+                            }
+                            _=>{},
                         }
-                        WakeResult::PushBack=>{
-                            // We are still locked, is_empty is still false, it's safe to put back the waker
-                            guard.queue.push_front($weak);
-                            return r;
-                        }
-                        _=>{},
                     }
-                }
-            }};
-        }
+                }};
+            }
 
-        if let Some(weak) = guard.queue.pop_front() {
-            process!(weak);
-            loop {
-                if let Some(weak) = guard.queue.pop_front() {
-                    process!(weak);
-                } else {
-                    self.is_empty.store(true, Ordering::SeqCst);
-                    return WakeResult::Next;
+            if let Some(weak) = guard.queue.pop_front() {
+                process!(weak);
+                loop {
+                    if let Some(weak) = guard.queue.pop_front() {
+                        process!(weak);
+                    } else {
+                        self.is_empty.store(true, Ordering::SeqCst);
+                        return WakeResult::Next;
+                    }
                 }
             }
         }

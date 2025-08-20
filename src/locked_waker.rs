@@ -254,6 +254,11 @@ impl<P> WakerInner<P> {
         self.state.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
+    pub fn get_state_strict(&self) -> u8 {
+        self.state.load(Ordering::SeqCst)
+    }
+
     /// Assume no lock
     #[inline(always)]
     pub fn wake(&self) -> WakeResult {
