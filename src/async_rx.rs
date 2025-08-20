@@ -188,75 +188,86 @@ impl<T> AsyncRx<T> {
                     return Ok(item);
                 }
             };
-            ($waker: expr) => {
+            ($cancel: expr) => {
                 if let Some(item) = shared.try_recv() {
                     shared.on_recv();
-                    shared.recv_waker_cancel($waker);
-                    let _ = o_waker.take();
+                    if let Some(waker) = o_waker.take() {
+                        if $cancel {
+                            shared.recv_waker_cancel(&waker);
+                        }
+                    }
                     return Ok(item);
                 }
             };
         }
-
-        if let Some(waker) = o_waker.as_ref() {
-            try_recv!(waker);
-            let state = waker.get_state();
-            if state == WakerState::Waiting as u8 {
-                if waker.will_wake(ctx) {
-                    return Err(TryRecvError::Empty);
-                } else {
-                    // spurious wake because no other future can be run,
-                    // might be blocking->async, let's yield to other thread
-                    // to save CPU resource.
-
-                    std::thread::yield_now();
-                    if let Some(waker) = o_waker.take() {
-                        self.recv_waker_cancel(&waker);
-                    }
-                }
-            } else if state == WakerState::Closed as u8 {
-                try_recv!(waker);
-                return Err(TryRecvError::Disconnected);
-            }
-        } else {
-            // First call
-            try_recv!();
-            let cfg = self.get_backoff_cfg();
-            if cfg.limit > 0 {
-                let mut backoff = Backoff::new(cfg);
-                loop {
-                    backoff.spin();
-                    try_recv!();
-                    if backoff.is_completed() {
+        loop {
+            if let Some(waker) = o_waker.as_ref() {
+                let mut state = waker.get_state_strict();
+                if state < WakerState::Waked as u8 {
+                    if waker.will_wake(ctx) {
+                        // Spurious waked by runtime, or
+                        // Normally only selection or multiplex future will get here.
+                        // No need to reg again, since waker is not consumed.
                         break;
+                    } else {
+                        match waker.abandon() {
+                            Ok(_) => {
+                                shared.recvs.cancel_waker(&waker);
+                                let _ = o_waker.take(); // waker cannot be used again
+                            }
+                            Err(_state) => state = _state, // waker is waked, can be reused
+                        }
+                    }
+                }
+                try_recv!(false);
+                if state == WakerState::Closed as u8 {
+                    return Err(TryRecvError::Disconnected);
+                }
+            } else {
+                // First call
+                try_recv!();
+                let cfg = self.get_backoff_cfg();
+                if cfg.limit > 0 {
+                    let mut backoff = Backoff::new(cfg);
+                    loop {
+                        backoff.spin();
+                        try_recv!();
+                        if backoff.is_completed() {
+                            break;
+                        }
                     }
                 }
             }
-        }
-        let _waker;
-        if let Some(waker) = o_waker.as_ref() {
-            waker.check_waker_nolock(ctx);
-            waker.set_state(WakerState::Init);
-            _waker = waker;
-        } else {
-            let waker = RecvWaker::new_async(ctx, ());
-            o_waker.replace(waker);
-            _waker = o_waker.as_ref().unwrap();
-        }
-        shared.reg_recv(_waker);
-        // NOTE: The other side put something whie reg_send and did not see the waker,
-        // should check the channel again, otherwise might incur a dead lock.
-        if !shared.is_empty() {
-            try_recv!(_waker);
-        }
-        if !stream {
-            _waker.commit_waiting();
+            let _waker;
+            if let Some(waker) = o_waker.as_ref() {
+                waker.check_waker_nolock(ctx);
+                waker.set_state(WakerState::Init);
+                _waker = waker;
+            } else {
+                let waker = RecvWaker::new_async(ctx, ());
+                o_waker.replace(waker);
+                _waker = o_waker.as_ref().unwrap();
+            }
+            shared.reg_recv(_waker);
+            // NOTE: The other side put something whie reg_send and did not see the waker,
+            // should check the channel again, otherwise might incur a dead lock.
+            if !shared.is_empty() {
+                try_recv!(true);
+            }
+            if !stream {
+                let state = _waker.commit_waiting();
+                if state != WakerState::Waiting as u8 {
+                    continue;
+                }
+            }
+            break;
         }
         if shared.is_disconnected() {
-            try_recv!(_waker);
+            try_recv!(true);
             return Err(TryRecvError::Disconnected);
+        } else {
+            return Err(TryRecvError::Empty);
         }
-        return Err(TryRecvError::Empty);
     }
 
     #[inline]
