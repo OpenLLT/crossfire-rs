@@ -113,6 +113,9 @@ impl<T> Rx<T> {
             let waker = self.waker_cache.new_blocking();
             let mut state;
             'MAIN: loop {
+                if waker.get_state() == WakerState::Waked as u8 {
+                    waker.set_state(WakerState::Init);
+                }
                 shared.reg_recv(&waker);
                 if shared.is_empty() {
                     state = waker.commit_waiting();
@@ -127,7 +130,7 @@ impl<T> Rx<T> {
                 if shared.is_disconnected() {
                     break 'MAIN;
                 }
-                while state == WakerState::WAITING as u8 {
+                while state == WakerState::Waiting as u8 {
                     match check_timeout(deadline) {
                         Ok(None) => {
                             std::thread::park();
@@ -142,7 +145,7 @@ impl<T> Rx<T> {
                     }
                     state = waker.get_state();
                 }
-                if state == WakerState::CLOSED as u8 {
+                if state == WakerState::Closed as u8 {
                     break 'MAIN;
                 }
                 backoff.reset();

@@ -202,11 +202,11 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         macro_rules! process_state {
             ($state: expr) => {{
                 let _ = o_waker.take();
-                if $state == WakerState::DONE as u8 {
+                if $state == WakerState::Done as u8 {
                     // receiver done it's job
                     Poll::Ready(Ok(()))
                 } else {
-                    debug_assert_eq!($state, WakerState::CLOSED as u8);
+                    debug_assert_eq!($state, WakerState::Closed as u8);
                     Poll::Ready(Err(()))
                 }
             }};
@@ -217,19 +217,19 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         loop {
             if let Some(waker) = o_waker.as_ref() {
                 state = waker.get_state();
-                if state < WakerState::WAKED as u8 {
+                if state < WakerState::Waked as u8 {
                     // Spurious waked by runtime, or
                     // Normally only selection or multiplex future will get here.
                     // No need to reg again, since waker is not consumed.
                     (state, *o_waker) = shared.sender_try_again_async(o_waker.take().unwrap(), ctx);
-                    if state == WakerState::WAITING as u8 {
+                    if state < WakerState::Waked as u8 {
                         return Poll::Pending;
                     }
                 }
-                if state > WakerState::WAKED as u8 {
+                if state > WakerState::Waked as u8 {
                     return process_state!(state);
                 } else {
-                    debug_assert_eq!(state, WakerState::WAKED as u8);
+                    debug_assert_eq!(state, WakerState::Waked as u8);
                     if shared.send(item) {
                         shared.on_send();
                         let _ = o_waker.take();
@@ -261,6 +261,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             }
             let waker = if let Some(w) = o_waker.take() {
                 w.set_ptr(std::ptr::null_mut());
+                w.set_state(WakerState::Init);
                 w.check_waker_nolock(ctx);
                 w
             } else {
@@ -268,17 +269,17 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             };
             (state, _waker) = shared.sender_reg_and_try(item, waker);
             *o_waker = _waker;
-            if state < WakerState::WAKED as u8 {
+            if state < WakerState::Waked as u8 {
                 if let Some(_backoff) = backoff.as_mut() {
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), _backoff);
                 }
             }
-            if state < WakerState::WAKED as u8 {
+            if state < WakerState::Waked as u8 {
                 return Poll::Pending;
-            } else if state > WakerState::WAKED as u8 {
+            } else if state > WakerState::Waked as u8 {
                 return process_state!(state);
             }
-            debug_assert_eq!(state, WakerState::WAKED as u8);
+            debug_assert_eq!(state, WakerState::Waked as u8);
             continue;
         }
     }

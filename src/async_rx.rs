@@ -201,7 +201,7 @@ impl<T> AsyncRx<T> {
         if let Some(waker) = o_waker.as_ref() {
             try_recv!(waker);
             let state = waker.get_state();
-            if state == WakerState::WAITING as u8 {
+            if state == WakerState::Waiting as u8 {
                 if waker.will_wake(ctx) {
                     return Err(TryRecvError::Empty);
                 } else {
@@ -214,9 +214,7 @@ impl<T> AsyncRx<T> {
                         self.recv_waker_cancel(&waker);
                     }
                 }
-            } else if state == WakerState::WAKED as u8 {
-                waker.check_waker_nolock(ctx);
-            } else if state == WakerState::CLOSED as u8 {
+            } else if state == WakerState::Closed as u8 {
                 try_recv!(waker);
                 return Err(TryRecvError::Disconnected);
             }
@@ -237,6 +235,8 @@ impl<T> AsyncRx<T> {
         }
         let _waker;
         if let Some(waker) = o_waker.as_ref() {
+            waker.check_waker_nolock(ctx);
+            waker.set_state(WakerState::Init);
             _waker = waker;
         } else {
             let waker = RecvWaker::new_async(ctx);

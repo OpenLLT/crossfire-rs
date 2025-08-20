@@ -148,10 +148,10 @@ impl<T: Send + 'static> Tx<T> {
                 // to allow more yield to receivers.
                 // For nxn (the backoff is already complete), wait a little bit.
                 (state, o_waker) = shared.sender_reg_and_try(&mut _item, waker);
-                while state < WakerState::WAKED as u8 {
+                while state < WakerState::Waked as u8 {
                     backoff.reset();
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
-                    if state == WakerState::WAITING as u8 {
+                    if state == WakerState::Waiting as u8 {
                         match check_timeout(deadline) {
                             Ok(None) => {
                                 std::thread::park();
@@ -165,7 +165,7 @@ impl<T: Send + 'static> Tx<T> {
                                         _item.assume_init_read()
                                     }));
                                 } else {
-                                    // state is WakerState::DONE
+                                    // state is WakerState::Done
                                     return Ok(());
                                 }
                             }
@@ -173,9 +173,9 @@ impl<T: Send + 'static> Tx<T> {
                     }
                     state = o_waker.as_ref().unwrap().get_state();
                 }
-                if state == WakerState::DONE as u8 {
+                if state == WakerState::Done as u8 {
                     return_ok!(o_waker);
-                } else if state == WakerState::WAKED as u8 {
+                } else if state == WakerState::Waked as u8 {
                     backoff.reset();
                     loop {
                         if shared.send(&_item) {
@@ -187,7 +187,7 @@ impl<T: Send + 'static> Tx<T> {
                         }
                         backoff.snooze();
                     }
-                } else if state == WakerState::CLOSED as u8 {
+                } else if state == WakerState::Closed as u8 {
                     return Err(SendTimeoutError::Disconnected(unsafe {
                         _item.assume_init_read()
                     }));
