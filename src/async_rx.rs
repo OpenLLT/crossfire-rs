@@ -213,8 +213,8 @@ impl<T> AsyncRx<T> {
                     // spurious wake because no other future can be run,
                     // might be blocking->async, let's yield to other thread
                     // to save CPU resource.
-
                     std::thread::yield_now();
+                    try_recv!();
                     if let Some(waker) = o_waker.take() {
                         self.recv_waker_cancel(&waker);
                     }
