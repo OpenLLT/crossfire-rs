@@ -227,12 +227,12 @@ impl<T> ChannelShared<T> {
         &self, waker: SendWaker<T>, ctx: &mut Context,
     ) -> (u8, Option<SendWaker<T>>) {
         if self.is_disconnected() {
-            match waker.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
+            match waker.try_change_state(WakerState::Waiting, WakerState::Closed) {
                 Ok(_) => {
-                    return (WakerState::CLOSED as u8, None);
+                    return (WakerState::Closed as u8, None);
                 }
                 Err(state) => {
-                    // Since all rx has been drop, not possible to by COPY,
+                    // Since all rx has been drop, not possible to by Copy,
                     return (state, None);
                 }
             }
@@ -243,7 +243,7 @@ impl<T> ChannelShared<T> {
         let backoff_conf: BackoffConfig;
         if will_wake {
             // might be due to select!
-            if state != WakerState::COPY as u8 {
+            if state != WakerState::Copy as u8 {
                 return (state, Some(waker));
             }
             backoff_conf = BackoffConfig { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT };
@@ -254,20 +254,20 @@ impl<T> ChannelShared<T> {
             backoff_conf = BackoffConfig { spin_limit: 2, limit: MAX_LIMIT };
         }
         let mut backoff = Backoff::new(backoff_conf);
-        while state <= WakerState::WAKED as u8 {
-            if state != WakerState::COPY as u8 && backoff.is_completed() {
+        while state <= WakerState::Waked as u8 {
+            if state != WakerState::Copy as u8 && backoff.is_completed() {
                 if will_wake {
                     return (state, Some(waker));
                 } else {
                     // The waker could not be used anymore
-                    match waker.try_change_state(WakerState::WAITING, WakerState::WAKED) {
+                    match waker.try_change_state(WakerState::Waiting, WakerState::Waked) {
                         Ok(_) => {
                             // This is rare case for idle select with spurious wake
                             self.senders.cancel_waker(&waker);
-                            return (WakerState::WAKED as u8, None);
+                            return (WakerState::Waked as u8, None);
                         }
                         Err(state) => {
-                            if state == WakerState::COPY as u8 {
+                            if state == WakerState::Copy as u8 {
                                 // reset to continue;
                                 backoff.reset();
                                 continue;
@@ -293,43 +293,43 @@ impl<T> ChannelShared<T> {
         // Not allow Spurious wake and enter this function again;
         if let Some(res) = self.try_send_oneshot(item) {
             if res {
-                waker.set_state(WakerState::DONE);
+                waker.set_state(WakerState::Done);
                 self.senders.cancel_waker(&waker);
                 self.on_send();
-                return (WakerState::DONE as u8, Some(waker));
+                return (WakerState::Done as u8, Some(waker));
             } else {
                 waker.set_ptr(item.as_mut_ptr());
                 if self.is_disconnected() {
-                    return (WakerState::CLOSED as u8, None);
+                    return (WakerState::Closed as u8, None);
                 } else {
-                    return (WakerState::WAITING as u8, Some(waker));
+                    return (WakerState::Waiting as u8, Some(waker));
                 }
             }
         } else {
             // Cancel to try again outside
-            // Just flow away this waker, on_recv will try to wake INIT state.
-            match waker.try_change_state(WakerState::WAITING, WakerState::WAKED) {
+            // Just flow away this waker, on_recv will try to wake Init state.
+            match waker.try_change_state(WakerState::Waiting, WakerState::Waked) {
                 Ok(_) => {
                     self.senders.cancel_waker(&waker);
                     // might be in queue, should not use again
-                    return (WakerState::WAKED as u8, None);
+                    return (WakerState::Waked as u8, None);
                 }
                 Err(_) => {
-                    return (WakerState::WAKED as u8, Some(waker));
+                    return (WakerState::Waked as u8, Some(waker));
                 }
             }
         }
     }
 
-    /// Prevent COPY state enter
+    /// Prevent Copy state enter
     #[inline(always)]
     pub(crate) fn sender_snooze(&self, waker: &SendWaker<T>, backoff: &mut Backoff) -> u8 {
         loop {
             backoff.snooze();
             let state = waker.get_state();
-            if state >= WakerState::WAKED as u8 {
+            if state >= WakerState::Waked as u8 {
                 return state;
-            } else if state == WakerState::WAITING as u8 && backoff.is_completed() {
+            } else if state == WakerState::Waiting as u8 && backoff.is_completed() {
                 return state;
             }
         }
@@ -343,20 +343,20 @@ impl<T> ChannelShared<T> {
         // protect against:
         // 1. sender_try_again_async () for spurious waked
         // 2. blocking timeout
-        if waker.try_change_state(WakerState::WAITING, WakerState::COPY).is_err() {
-            // WAKED set by cancel()
+        if waker.try_change_state(WakerState::Waiting, WakerState::Copy).is_err() {
+            // Waked set by cancel()
             return false;
         }
         let p = waker.load_ptr();
         if p == ptr::null_mut() {
-            if waker.try_change_state(WakerState::COPY, WakerState::WAKED).is_ok() {
+            if waker.try_change_state(WakerState::Copy, WakerState::Waked).is_ok() {
                 waker._wake_nolock();
             }
             return false;
         }
         if let Channel::Array(inner) = &self.inner {
             if unsafe { inner.push_with_ptr(p) } {
-                waker.set_state(WakerState::DONE);
+                waker.set_state(WakerState::Done);
                 waker._wake_nolock();
                 self.on_send();
                 return true;
@@ -366,7 +366,7 @@ impl<T> ChannelShared<T> {
         }
         // still full
         // Let the sender to re-register
-        waker.set_state(WakerState::WAKED);
+        waker.set_state(WakerState::Waked);
         waker._wake_nolock();
         // Do not try another
         return true;
@@ -377,7 +377,7 @@ impl<T> ChannelShared<T> {
     pub(crate) fn on_send(&self) {
         while let Some(waker) = self.recvs.pop() {
             if let Ok(state) = waker.wake_simple() {
-                if state != WakerState::INIT as u8 {
+                if state != WakerState::Init as u8 {
                     return;
                 }
             }
@@ -402,17 +402,17 @@ impl<T> ChannelShared<T> {
     }
 
     /// Call on cancellation, return true to indicate drop temporary message
-    /// return false to indicate already DONE.
+    /// return false to indicate already Done.
     #[inline(always)]
     pub(crate) fn abandon_send_waker(&self, waker: SendWaker<T>) -> bool {
         let state = waker.abandon();
-        if state == WakerState::CLOSED as u8 {
+        if state == WakerState::Closed as u8 {
             self.senders.clear_wakers(waker.get_seq());
             return true;
-        } else if state == WakerState::DONE as u8 {
+        } else if state == WakerState::Done as u8 {
             return false;
         } else {
-            debug_assert_eq!(state, WakerState::WAKED as u8);
+            debug_assert_eq!(state, WakerState::Waked as u8);
             // We are waked, but give up sending, should notify another sender for safety
             self.on_recv();
             return true;
@@ -423,13 +423,13 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn abandon_recv_waker(&self, waker: RecvWaker) -> bool {
         let state = waker.abandon();
-        if state == WakerState::CLOSED as u8 {
+        if state == WakerState::Closed as u8 {
             self.recvs.clear_wakers(waker.get_seq());
             return true;
-        } else if state == WakerState::DONE as u8 {
+        } else if state == WakerState::Done as u8 {
             return false;
         } else {
-            debug_assert_eq!(state, WakerState::WAKED as u8);
+            debug_assert_eq!(state, WakerState::Waked as u8);
             // We are waked, but give up receiving, should notify another receiver for safety
             self.on_send();
             return true;

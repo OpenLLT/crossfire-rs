@@ -15,12 +15,12 @@ use std::thread;
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum WakerState {
-    INIT = 0, // A temporary state, https://github.com/frostyplanet/crossfire-rs/issues/22
-    WAITING = 1,
-    COPY = 2,
-    WAKED = 3,
-    DONE = 4,
-    CLOSED = 5, // Channel closed, or timeout cancellation
+    Init = 0, // A temporary state, https://github.com/frostyplanet/crossfire-rs/issues/22
+    Waiting = 1,
+    Copy = 2,
+    Waked = 3,
+    Done = 4,
+    Closed = 5, // Channel closed, or timeout cancellation
 }
 
 pub trait WakerTrait: Deref<Target = Self::Inner> {
@@ -61,7 +61,7 @@ impl<T> SendWaker<T> {
     pub fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
-            state: AtomicU8::new(WakerState::WAITING as u8),
+            state: AtomicU8::new(WakerState::Waiting as u8),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
             payload: AtomicPtr::new(ptr::null_mut()),
         }))
@@ -103,7 +103,7 @@ impl<T> WakerTrait for SendWaker<T> {
     fn new_blocking() -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
-            state: AtomicU8::new(WakerState::WAKED as u8),
+            state: AtomicU8::new(WakerState::Waked as u8),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
             payload: AtomicPtr::new(ptr::null_mut()),
         }))
@@ -111,7 +111,7 @@ impl<T> WakerTrait for SendWaker<T> {
 
     #[inline(always)]
     fn reset(inner: &Arc<Self::Inner>) {
-        inner.state.store(WakerState::WAKED as u8, Ordering::Release);
+        inner.state.store(WakerState::Waked as u8, Ordering::Release);
         // Will reset the payload in reg_waker()
         inner.payload.store(ptr::null_mut(), Ordering::Release);
     }
@@ -169,7 +169,7 @@ impl RecvWaker {
     pub fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
-            state: AtomicU8::new(WakerState::INIT as u8),
+            state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
             payload: (),
         }))
@@ -178,15 +178,15 @@ impl RecvWaker {
     /// Return true if the canceled waker is not woken
     #[inline(always)]
     pub fn cancel(&self) -> bool {
-        self.0.state.swap(WakerState::WAKED as u8, Ordering::SeqCst) < WakerState::WAKED as u8
+        self.0.state.swap(WakerState::Waked as u8, Ordering::SeqCst) < WakerState::Waked as u8
     }
 
     #[inline(always)]
     pub fn commit_waiting(&self) -> u8 {
-        if let Err(s) = self.try_change_state(WakerState::INIT, WakerState::WAITING) {
+        if let Err(s) = self.try_change_state(WakerState::Init, WakerState::Waiting) {
             return s;
         } else {
-            return WakerState::WAITING as u8;
+            return WakerState::Waiting as u8;
         }
     }
 }
@@ -208,7 +208,7 @@ impl WakerTrait for RecvWaker {
     fn new_blocking() -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicUsize::new(0),
-            state: AtomicU8::new(WakerState::INIT as u8),
+            state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
             payload: (),
         }))
@@ -216,7 +216,7 @@ impl WakerTrait for RecvWaker {
 
     #[inline(always)]
     fn reset(inner: &Arc<Self::Inner>) {
-        inner.state.store(WakerState::INIT as u8, Ordering::Release);
+        inner.state.store(WakerState::Init as u8, Ordering::Release);
     }
 
     #[inline(always)]
@@ -319,9 +319,9 @@ impl<P> WakerInner<P> {
         let _state = state as u8;
         #[cfg(test)]
         {
-            if _state != WakerState::CLOSED as u8 {
+            if _state != WakerState::Closed as u8 {
                 let __state = self.get_state();
-                assert!(__state <= WakerState::WAKED as u8, "unexpected state: {}", __state);
+                assert!(__state <= WakerState::Waked as u8, "unexpected state: {}", __state);
             }
         }
         self.state.store(_state, Ordering::Release);
@@ -329,26 +329,26 @@ impl<P> WakerInner<P> {
     }
 
     /// Return current status,
-    /// CLOSED: might be channel closed, or future successfully cancelled, the future should drop message; try to clear its waker.
-    /// DONE: the message actually sent, nothing to DO
-    /// WAKED: the future should drop message, and waked another counterpart.
+    /// Closed: might be channel closed, or future successfully cancelled, the future should drop message; try to clear its waker.
+    /// Done: the message actually sent, nothing to DO
+    /// Waked: the future should drop message, and waked another counterpart.
     #[inline(always)]
     pub fn abandon(&self) -> u8 {
         // it will content with close() and on_recv()
         let mut backoff = Backoff::new(BackoffConfig::default());
         loop {
             match self.state.compare_exchange(
-                WakerState::WAITING as u8,
-                WakerState::CLOSED as u8,
+                WakerState::Waiting as u8,
+                WakerState::Closed as u8,
                 Ordering::SeqCst,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return WakerState::CLOSED as u8,
+                Ok(_) => return WakerState::Closed as u8,
                 Err(s) => {
-                    if s >= WakerState::WAKED as u8 {
+                    if s >= WakerState::Waked as u8 {
                         return s;
                     }
-                } // If COPYing, will wait until complete
+                } // If Copying, will wait until complete
             }
             backoff.snooze();
         }
@@ -357,13 +357,13 @@ impl<P> WakerInner<P> {
     #[allow(dead_code)]
     #[inline(always)]
     pub fn is_waked(&self) -> bool {
-        self.state.load(Ordering::Acquire) >= WakerState::WAKED as u8
+        self.state.load(Ordering::Acquire) >= WakerState::Waked as u8
     }
 
     #[inline(always)]
     pub fn close_wake(&self) {
         // should have lock because it will content with abandon()
-        if self.change_state_smaller_eq(WakerState::WAITING, WakerState::CLOSED).is_ok() {
+        if self.change_state_smaller_eq(WakerState::Waiting, WakerState::Closed).is_ok() {
             self._wake_nolock();
         }
         return;
@@ -404,7 +404,7 @@ impl<P> WakerInner<P> {
     /// Assume no lock
     #[inline(always)]
     pub fn wake_simple(&self) -> Result<u8, ()> {
-        if let Ok(state) = self.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED) {
+        if let Ok(state) = self.change_state_smaller_eq(WakerState::Waiting, WakerState::Waked) {
             self._wake_nolock();
             return Ok(state);
         }
@@ -467,7 +467,7 @@ impl<T: WakerTrait> WakerCache<T> {
 
     #[inline(always)]
     pub(crate) fn push(&self, waker: T) {
-        if waker.get_state() < WakerState::WAKED as u8 {
+        if waker.get_state() < WakerState::Waked as u8 {
             return;
         }
         let a = waker.to_arc();
