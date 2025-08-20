@@ -67,7 +67,13 @@ impl<T> RegistrySender<T> {
         F: Fn(&WakerInner<*mut T>) -> WakeResult,
     {
         match self {
-            RegistrySender::Single(inner) => inner.fire(handle),
+            RegistrySender::Single(inner) => {
+                if let Some(waker) = inner.pop() {
+                    handle(&waker)
+                } else {
+                    WakeResult::Next
+                }
+            }
             RegistrySender::Multi(inner) => inner.fire(handle),
             _ => WakeResult::Next,
         }
@@ -126,6 +132,20 @@ impl RegistryRecv {
     }
 
     #[inline(always)]
+    pub fn fire(&self) {
+        match self {
+            RegistryRecv::Single(inner) => {
+                if let Some(waker) = inner.pop() {
+                    let _ = waker.wake();
+                }
+            }
+            RegistryRecv::Multi(inner) => {
+                inner.fire(|waker| waker.wake());
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn clear_wakers(&self, seq: usize) {
         match self {
             RegistryRecv::Single(inner) => inner.clear_wakers(seq),
@@ -139,21 +159,6 @@ impl RegistryRecv {
         match self {
             RegistryRecv::Single(inner) => inner.cancel_waker(),
             RegistryRecv::Multi(inner) => inner.clear_wakers(waker.get_seq()),
-        }
-    }
-
-    #[inline(always)]
-    pub fn fire<F>(&self, handle: F)
-    where
-        F: Fn(&WakerInner<()>) -> WakeResult,
-    {
-        match self {
-            RegistryRecv::Single(inner) => {
-                inner.fire(handle);
-            }
-            RegistryRecv::Multi(inner) => {
-                inner.fire(handle);
-            }
         }
     }
 
@@ -209,18 +214,11 @@ impl<P> RegistrySingle<P> {
     }
 
     #[inline(always)]
-    fn fire<F>(&self, mut handle: F) -> WakeResult
-    where
-        F: FnMut(&WakerInner<P>) -> WakeResult,
-    {
+    fn pop(&self) -> Option<Arc<WakerInner<P>>> {
         if let Some(inner) = self.cell.pop() {
-            let r = handle(&inner);
-            if r == WakeResult::PushBack {
-                self.cell.put(Arc::downgrade(&inner));
-            }
-            return r;
+            Some(inner)
         } else {
-            return WakeResult::Next;
+            None
         }
     }
 

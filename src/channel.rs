@@ -356,7 +356,7 @@ impl<T> ChannelShared<T> {
     /// Wake up one rx
     #[inline(always)]
     pub(crate) fn on_send(&self) {
-        self.recvs.fire(|waker| waker.wake());
+        self.recvs.fire();
     }
 
     /// Wake up one tx
