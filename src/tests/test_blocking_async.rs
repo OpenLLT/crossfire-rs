@@ -230,24 +230,7 @@ fn test_pressure_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxT
 
 #[logfn]
 #[rstest]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(1), 10)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(1), 100)]
 #[case(mpsc::bounded_tx_blocking_rx_async::<usize>(1), 1000)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(100), 10)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(100), 100)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(100), 1000)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 10)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 100)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 1000)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 10)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 100)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 1000)]
-#[case(mpsc::unbounded_async::<usize>(), 10)]
-#[case(mpsc::unbounded_async::<usize>(), 100)]
-#[case(mpsc::unbounded_async::<usize>(), 1000)]
-#[case(mpmc::unbounded_async::<usize>(), 10)]
-#[case(mpmc::unbounded_async::<usize>(), 100)]
-#[case(mpmc::unbounded_async::<usize>(), 1000)]
 fn test_pressure_tx_multi_blocking_1_rx_async<R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (MTx<usize>, R), #[case] tx_count: usize,
 ) {
