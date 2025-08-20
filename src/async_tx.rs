@@ -216,7 +216,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // to skip the timeout cleaning logic in Drop.
         loop {
             if let Some(waker) = o_waker.as_ref() {
-                state = waker.get_state();
+                state = waker.get_state_strict();
                 if state < WakerState::Waked as u8 {
                     // Spurious waked by runtime, or
                     // Normally only selection or multiplex future will get here.

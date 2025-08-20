@@ -232,7 +232,7 @@ impl<T> ChannelShared<T> {
     pub(crate) fn sender_try_again_async(
         &self, waker: SendWaker<T>, ctx: &mut Context,
     ) -> (u8, Option<SendWaker<T>>) {
-        // NOTE: it's possible be WakerState::INIT for AsyncSink::poll_send()
+        // NOTE: it's possible be WakerState::Init for AsyncSink::poll_send()
         // Async context does not use direct copy, so there won't be COPY state.
         if self.is_disconnected() {
             match waker.change_state_smaller_eq(WakerState::Waiting, WakerState::Closed) {

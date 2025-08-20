@@ -169,7 +169,7 @@ impl<T: Send + 'static> Tx<T> {
                             }
                         }
                     }
-                    state = o_waker.as_ref().unwrap().get_state();
+                    state = o_waker.as_ref().unwrap().get_state_strict();
                 }
             }
             if state == WakerState::Done as u8 {

@@ -332,17 +332,22 @@ impl<P> RegistryMulti<P> {
             ($weak: expr) => {{
                 if let Some(waker) = $weak.upgrade() {
                     let _seq = waker.get_seq();
-                    if _seq > seq {
-                        guard.queue.push_front($weak);
-                        return;
-                    } else if _seq < seq {
-                        let _ = waker.wake();
+                    if _seq == seq {
+                        true
                     } else {
-                        if guard.queue.is_empty() {
-                            self.is_empty.store(true, Ordering::SeqCst);
+                        // There might be later waker cancel due to success sending before commit_waiting.
+                        // While earlier waker is still waiting.
+                        if waker.get_state_strict() < WakerState::Waked as u8 {
+                            guard.queue.push_front($weak);
+                            return;
                         }
-                        return;
+                        true
                     }
+                } else {
+                    if guard.queue.is_empty() {
+                        self.is_empty.store(true, Ordering::SeqCst);
+                    }
+                    return;
                 }
             }};
         }
