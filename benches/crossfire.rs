@@ -281,6 +281,7 @@ async fn _crossfire_bounded_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>
 }
 
 fn crossfire_bounded_1_blocking_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_blocking_1_1");
     bench_bounded_blocking!(group, "spsc", 1, 1, spsc::bounded_blocking, 1, TEN_THOUSAND, 10, 100);
     bench_bounded_blocking!(group, "mpsc", 1, 1, mpsc::bounded_blocking, 1, TEN_THOUSAND, 10, 100);
@@ -289,6 +290,7 @@ fn crossfire_bounded_1_blocking_1_1(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_1_blocking_n_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_blocking_n_1");
     for tx_count in [1, 2, 4, 8, 16] {
         bench_bounded_blocking!(
@@ -320,6 +322,7 @@ fn crossfire_bounded_1_blocking_n_1(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_1_blocking_n_n(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_blocking_n_n");
     for input in [(2, 2), (4, 4), (8, 8), (16, 16)] {
         bench_bounded_blocking!(
@@ -338,6 +341,7 @@ fn crossfire_bounded_1_blocking_n_n(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_100_blocking_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_blocking_1_1");
     bench_bounded_blocking!(group, "spsc", 1, 1, spsc::bounded_blocking, 100, ONE_MILLION);
     bench_bounded_blocking!(group, "mpsc", 1, 1, mpsc::bounded_blocking, 100, ONE_MILLION);
@@ -346,6 +350,7 @@ fn crossfire_bounded_100_blocking_1_1(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_100_blocking_n_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_blocking_n_1");
     for tx_count in [1, 2, 4, 8, 16] {
         bench_bounded_blocking!(
@@ -373,6 +378,7 @@ fn crossfire_bounded_100_blocking_n_1(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_100_blocking_n_n(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_blocking_n_n");
     for input in [(2, 2), (4, 4), (8, 8), (16, 16)] {
         bench_bounded_blocking!(
@@ -389,6 +395,7 @@ fn crossfire_bounded_100_blocking_n_n(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_1_async_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_async_1_1");
     bench_bounded_async!(group, "spsc", 1, 1, spsc::bounded_async, 1, TEN_THOUSAND, 10, 100);
     bench_bounded_async!(group, "mpsc", 1, 1, mpsc::bounded_async, 1, TEN_THOUSAND, 10, 100);
@@ -397,6 +404,7 @@ fn crossfire_bounded_1_async_1_1(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_1_async_n_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_async_n_1");
     for tx_count in [2, 4, 8, 16] {
         bench_bounded_async!(
@@ -428,6 +436,7 @@ fn crossfire_bounded_1_async_n_1(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_1_async_n_n(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_1_async_n_n");
     for input in [(2, 2), (4, 4), (8, 8), (16, 16)] {
         bench_bounded_async!(
@@ -459,6 +468,7 @@ fn crossfire_bounded_1_async_n_n(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_100_async_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_async_1_1");
     bench_bounded_async!(group, "spsc", 1, 1, spsc::bounded_async, 100, ONE_MILLION);
     bench_bounded_async!(group, "mpsc", 1, 1, mpsc::bounded_async, 100, ONE_MILLION);
@@ -467,6 +477,7 @@ fn crossfire_bounded_100_async_1_1(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_100_async_n_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_async_n_1");
     for tx_count in [1, 2, 4, 8, 16] {
         bench_bounded_async!(group, "mpsc", tx_count, 1, mpsc::bounded_async, 100, ONE_MILLION);
@@ -479,6 +490,7 @@ fn crossfire_bounded_100_async_n_1(c: &mut Criterion) {
 }
 
 fn crossfire_bounded_100_async_n_n(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_bounded_100_async_n_n");
     for input in [(2, 2), (4, 4), (8, 8), (16, 16)] {
         bench_bounded_async!(
@@ -495,6 +507,7 @@ fn crossfire_bounded_100_async_n_n(c: &mut Criterion) {
 }
 
 fn crossfire_unbounded_blocking_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_1_1");
     bench_unbounded_blocking!(group, "spsc", 1, 1, spsc::unbounded_blocking, ONE_MILLION);
     bench_unbounded_blocking!(group, "mpsc", 1, 1, mpsc::unbounded_blocking, ONE_MILLION);
@@ -503,6 +516,7 @@ fn crossfire_unbounded_blocking_1_1(c: &mut Criterion) {
 }
 
 fn crossfire_unbounded_blocking_n_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_n_1");
     for input in [1, 2, 4, 8, 16] {
         bench_unbounded_blocking!(group, "mpsc", input, 1, mpsc::unbounded_blocking, ONE_MILLION);
@@ -514,6 +528,7 @@ fn crossfire_unbounded_blocking_n_1(c: &mut Criterion) {
 }
 
 fn crossfire_unbounded_blocking_n_n(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_n_n");
     for input in [(2, 2), (4, 4), (8, 8), (16, 16)] {
         bench_unbounded_blocking!(
@@ -529,6 +544,7 @@ fn crossfire_unbounded_blocking_n_n(c: &mut Criterion) {
 }
 
 fn crossfire_unbounded_async_1_1(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_async_1_1");
     bench_unbounded_async!(group, "spsc", 1, 1, spsc::unbounded_async, ONE_MILLION);
     bench_unbounded_async!(group, "mpsc", 1, 1, mpsc::unbounded_async, ONE_MILLION);
@@ -537,6 +553,7 @@ fn crossfire_unbounded_async_1_1(c: &mut Criterion) {
 }
 
 fn crossfire_unbounded_async_mpsc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_async_n_1");
     for input in [1, 2, 4, 8, 16] {
         bench_unbounded_async!(group, "mpsc", input, 1, mpsc::unbounded_async, ONE_MILLION);
@@ -548,6 +565,7 @@ fn crossfire_unbounded_async_mpsc(c: &mut Criterion) {
 }
 
 fn crossfire_unbounded_async_mpmc(c: &mut Criterion) {
+    detect_backoff_cfg();
     let mut group = c.benchmark_group("crossfire_unbounded_async_n_n");
     for input in [(2, 2), (4, 4), (8, 8), (16, 16)] {
         bench_unbounded_async!(group, "mpmc", input.0, input.1, mpmc::unbounded_async, ONE_MILLION);
