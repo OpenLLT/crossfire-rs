@@ -268,11 +268,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             };
             (state, _waker) = shared.sender_reg_and_try(item, waker, sink);
             *o_waker = _waker;
-            //            if state < WakerState::Waked as u8 {
-            //                if let Some(_backoff) = backoff.as_mut() {
-            //                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), _backoff);
-            //                }
-            //            }
             if state < WakerState::Waked as u8 {
                 return Poll::Pending;
             } else if state > WakerState::Waked as u8 {

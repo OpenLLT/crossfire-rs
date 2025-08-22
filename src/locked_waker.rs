@@ -16,7 +16,7 @@ use std::thread;
 pub enum WakerState {
     Init = 0, // A temporary state, https://github.com/frostyplanet/crossfire-rs/issues/22
     Waiting = 1,
-    Copy = 2, // Omit due to skipping direct copy on async or with deadline
+    //Copy = 2, // Omit due to skipping direct copy on async or with deadline
     Waked = 3,
     Done = 4,
     Closed = 5, // Channel closed, or timeout cancellation

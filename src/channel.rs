@@ -251,10 +251,7 @@ impl<T> ChannelShared<T> {
         let backoff_conf: BackoffConfig;
         if will_wake {
             // might be due to select!
-            if state != WakerState::Copy as u8 {
-                return (state, Some(waker));
-            }
-            backoff_conf = BackoffConfig { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT };
+            return (state, Some(waker));
         } else {
             // spurious wake because no other future can be run,
             // might be async<->blocking, let's yield to other thread
@@ -263,25 +260,16 @@ impl<T> ChannelShared<T> {
         }
         let mut backoff = Backoff::new(backoff_conf);
         while state <= WakerState::Waked as u8 {
-            if state != WakerState::Copy as u8 && backoff.is_completed() {
-                if will_wake {
-                    return (state, Some(waker));
-                } else {
-                    // The waker could not be used anymore
-                    match waker.change_state_smaller_eq(WakerState::Waiting, WakerState::Waked) {
-                        Ok(_) => {
-                            // This is rare case for idle select with spurious wake
-                            self.senders.cancel_waker(&waker);
-                            return (WakerState::Waked as u8, None);
-                        }
-                        Err(state) => {
-                            if state == WakerState::Copy as u8 {
-                                // reset to continue;
-                                backoff.reset();
-                                continue;
-                            }
-                            return (state, None);
-                        }
+            if backoff.is_completed() {
+                // The waker could not be used anymore
+                match waker.change_state_smaller_eq(WakerState::Waiting, WakerState::Waked) {
+                    Ok(_) => {
+                        // This is rare case for idle select with spurious wake
+                        self.senders.cancel_waker(&waker);
+                        return (WakerState::Waked as u8, None);
+                    }
+                    Err(state) => {
+                        return (state, None);
                     }
                 }
             }
