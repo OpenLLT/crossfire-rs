@@ -207,6 +207,11 @@ impl<P> WakerInner<P> {
                     if s >= WakerState::Waked as u8 {
                         return s;
                     }
+                    if s == WakerState::Init as u8 {
+                        // Not expect to call abandon in Init state, just defensive against
+                        // a dead loop
+                        return s;
+                    }
                 } // If Copying, will wait until complete
             }
             backoff.snooze();

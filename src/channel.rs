@@ -395,10 +395,14 @@ impl<T> ChannelShared<T> {
     pub(crate) fn abandon_send_waker(&self, waker: SendWaker<T>) -> bool {
         let state = waker.abandon();
         if state == WakerState::Closed as u8 {
-            self.senders.clear_wakers(waker.get_seq());
+            self.senders.clear_wakers(&waker);
             return true;
         } else if state == WakerState::Done as u8 {
             return false;
+        } else if state == WakerState::Init as u8 {
+            // For AsyncSink::poll_send, clear only one
+            self.senders.cancel_waker(&waker);
+            return true;
         } else {
             debug_assert_eq!(state, WakerState::Waked as u8);
             // We are waked, but give up sending, should notify another sender for safety
@@ -412,22 +416,20 @@ impl<T> ChannelShared<T> {
     pub(crate) fn abandon_recv_waker(&self, waker: RecvWaker) -> bool {
         let state = waker.abandon();
         if state == WakerState::Closed as u8 {
-            self.recvs.clear_wakers(waker.get_seq());
+            self.recvs.clear_wakers(&waker);
             return true;
         } else if state == WakerState::Done as u8 {
             return false;
+        } else if state == WakerState::Init as u8 {
+            // For AsyncStream::poll_item, clear only one
+            self.recvs.cancel_waker(&waker);
+            return true;
         } else {
             debug_assert_eq!(state, WakerState::Waked as u8);
             // We are waked, but give up receiving, should notify another receiver for safety
             self.on_send();
             return true;
         }
-    }
-
-    /// On timeout, clear dead wakers on receiver queue
-    #[inline(always)]
-    pub(crate) fn clear_recv_wakers(&self, seq: usize) {
-        self.recvs.clear_wakers(seq);
     }
 
     #[inline]
