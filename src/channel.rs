@@ -65,11 +65,11 @@ pub struct ChannelShared<T> {
     closed: AtomicBool,
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
-    congest: AtomicIsize,
+    pub(crate) congest: AtomicIsize,
     inner: Channel<T>,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
-    bound_size: Option<u32>,
+    pub(crate) bound_size: Option<u32>,
 }
 
 impl<T> ChannelShared<T> {
@@ -147,8 +147,8 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn is_congest(&self) -> bool {
-        self.congest.load(Ordering::Relaxed) > 0
+    pub(crate) fn sender_direct_copy(&self) -> bool {
+        self.senders.use_direct_copy(self)
     }
 
     /// Just for debugging purpose, to monitor queue size
@@ -260,7 +260,7 @@ impl<T> ChannelShared<T> {
         }
         let mut backoff = Backoff::new(backoff_conf);
         while state <= WakerState::Waked as u8 {
-            if backoff.is_completed() {
+            if backoff.snooze() {
                 // The waker could not be used anymore
                 match waker.change_state_smaller_eq(WakerState::Waiting, WakerState::Waked) {
                     Ok(_) => {
@@ -273,7 +273,6 @@ impl<T> ChannelShared<T> {
                     }
                 }
             }
-            backoff.snooze();
             state = waker.get_state();
         }
         return (state, None);
@@ -334,11 +333,11 @@ impl<T> ChannelShared<T> {
     pub(crate) fn sender_snooze(&self, waker: &SendWaker<T>, backoff: &mut Backoff) -> u8 {
         backoff.reset();
         loop {
-            backoff.snooze();
             let state = waker.get_state();
             if state >= WakerState::Waked as u8 {
                 return state;
-            } else if state == WakerState::Waiting as u8 && backoff.is_completed() {
+            }
+            if backoff.snooze() {
                 return state;
             }
         }

@@ -98,17 +98,25 @@ impl Backoff {
 
     #[allow(dead_code)]
     #[inline(always)]
-    pub fn spin(&mut self) {
-        for _ in 0..1 << self.step {
+    pub fn spin(&mut self) -> bool {
+        for _ in 0..1 << self.step.min(SPIN_LIMIT) {
             std::hint::spin_loop();
         }
         if self.step < MAX_LIMIT {
             self.step += 1;
+            return self.step > self.config.limit;
+        } else {
+            true
         }
     }
 
     #[inline(always)]
-    pub fn snooze(&mut self) {
+    pub fn set_step(&mut self, step: u16) {
+        self.step = step;
+    }
+
+    #[inline(always)]
+    pub fn snooze(&mut self) -> bool {
         if self.step < self.config.spin_limit {
             for _ in 0..1 << self.step {
                 std::hint::spin_loop();
@@ -116,15 +124,23 @@ impl Backoff {
         } else {
             std::thread::yield_now();
         }
-        if self.step < MAX_LIMIT {
+        if self.step < self.config.limit {
             self.step += 1;
+            false
+        } else {
+            true
         }
     }
 
-    pub fn yield_now(&mut self) {
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub fn yield_now(&mut self) -> bool {
         std::thread::yield_now();
-        if self.step < MAX_LIMIT {
+        if self.step < self.config.limit {
             self.step += 1;
+            false
+        } else {
+            false
         }
     }
 
@@ -173,8 +189,8 @@ mod tests {
         backoff.snooze();
         backoff.snooze();
         backoff.snooze();
-        assert_eq!(backoff.step, 6);
+        assert_eq!(backoff.step, 4);
         backoff.spin();
-        assert_eq!(backoff.step, 7);
+        assert_eq!(backoff.step, 5);
     }
 }

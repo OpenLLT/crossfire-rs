@@ -24,11 +24,16 @@ impl<T> RegistrySender<T> {
     }
 
     #[inline(always)]
-    pub fn not_congest(&self) -> bool {
+    pub fn use_direct_copy(&self, channel: &ChannelShared<T>) -> bool {
         match self {
-            RegistrySender::Multi(inner) => inner.is_empty(),
+            RegistrySender::Multi(inner) => {
+                if channel.congest.load(Ordering::Relaxed) > 0 {
+                    return true;
+                }
+                return !inner.is_empty();
+            }
             RegistrySender::Single(_) => true,
-            RegistrySender::Dummy => true,
+            RegistrySender::Dummy => false,
         }
     }
 
@@ -252,7 +257,7 @@ impl<P> RegistryMulti<P> {
 
     #[inline(always)]
     fn is_empty(&self) -> bool {
-        self.is_empty.load(Ordering::Relaxed)
+        self.is_empty.load(Ordering::Acquire)
     }
 
     #[inline(always)]

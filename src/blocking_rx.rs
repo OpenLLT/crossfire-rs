@@ -104,9 +104,9 @@ impl<T> Rx<T> {
             try_recv!();
             let mut backoff = Backoff::new(BackoffConfig::default());
             loop {
-                backoff.snooze();
+                let r = backoff.snooze();
                 try_recv!();
-                if backoff.is_completed() {
+                if r {
                     break;
                 }
             }
@@ -149,13 +149,11 @@ impl<T> Rx<T> {
                     break 'MAIN;
                 }
                 backoff.reset();
-                // Waited due to park_timeout or spurious waked
                 loop {
                     try_recv!(waker);
-                    if backoff.is_completed() {
+                    if backoff.snooze() {
                         break;
                     }
-                    backoff.snooze();
                 }
             }
             try_recv!(waker);

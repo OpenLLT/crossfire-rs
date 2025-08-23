@@ -89,14 +89,49 @@ impl<T: Send + 'static> Tx<T> {
             shared.on_send();
             return Ok(());
         }
-        let mut o_waker: Option<SendWaker<T>> = None;
-        let mut state: u8;
-        let backoff_cfg = BackoffConfig::default().spin(2);
+        let large = shared.bound_size.unwrap() > 10;
+        let backoff_cfg = BackoffConfig::default().spin(2).limit(7);
         let mut backoff = Backoff::new(backoff_cfg);
-        let fastpath = shared.senders.not_congest() && shared.is_congest() == false;
+        let direct_copy = deadline.is_none() && shared.sender_direct_copy();
+        if large {
+            backoff.set_step(2);
+        }
+        loop {
+            let r = if large { backoff.yield_now() } else { backoff.spin() };
+            if direct_copy && large {
+                match shared.try_send_oneshot(&_item) {
+                    Some(false) => break,
+                    None => {
+                        if r {
+                            break;
+                        }
+                        continue;
+                    }
+                    _ => {
+                        shared.on_send();
+                        std::thread::yield_now();
+                        return Ok(());
+                    }
+                }
+            } else {
+                if !shared.send(&_item) {
+                    if r {
+                        break;
+                    }
+                    continue;
+                }
+                shared.on_send();
+                return Ok(());
+            }
+        }
+        let direct_copy_ptr: *mut T =
+            if direct_copy { _item.as_mut_ptr() } else { std::ptr::null_mut() };
+
+        let mut state: u8;
+        let mut o_waker: Option<SendWaker<T>> = None;
         macro_rules! return_ok {
-            ($waker: expr) => {
-                if let Some(waker) = $waker.take() {
+            () => {
+                if let Some(waker) = o_waker.take() {
                     self.waker_cache.push(waker);
                 }
                 if shared.is_full() {
@@ -105,33 +140,6 @@ impl<T: Send + 'static> Tx<T> {
                 }
                 return Ok(())
             };
-        }
-        let direct_copy_ptr: *mut T;
-        if fastpath || deadline.is_some() {
-            while !backoff.is_completed() {
-                backoff.snooze();
-                if shared.send(&_item) {
-                    shared.on_send();
-                    return Ok(());
-                }
-            }
-            direct_copy_ptr = std::ptr::null_mut();
-        } else {
-            while !backoff.is_completed() {
-                backoff.yield_now();
-                match shared.try_send_oneshot(&_item) {
-                    Some(true) => {
-                        shared.on_send();
-                        std::thread::yield_now();
-                        return Ok(());
-                    }
-                    Some(false) => {
-                        break;
-                    }
-                    None => {}
-                }
-            }
-            direct_copy_ptr = _item.as_mut_ptr();
         }
         loop {
             let waker = if let Some(w) = o_waker.take() {
@@ -173,13 +181,13 @@ impl<T: Send + 'static> Tx<T> {
                 }
             }
             if state == WakerState::Done as u8 {
-                return_ok!(o_waker);
+                return_ok!();
             } else if state == WakerState::Waked as u8 {
                 backoff.reset();
                 loop {
                     if shared.send(&_item) {
                         shared.on_send();
-                        return_ok!(o_waker);
+                        return_ok!();
                     }
                     if backoff.is_completed() {
                         break;
