@@ -1013,10 +1013,16 @@ fn test_spurious_sink(setup_log: ()) {
             if normal {
                 assert_eq!(_tx.await.expect("send ok"), 1);
             } else {
-                if let Ok(Err(step)) = tokio::time::timeout(Duration::from_secs(5), _tx).await {
-                    assert_eq!(step, 1);
-                } else {
-                    unreachable!();
+                match tokio::time::timeout(Duration::from_secs(5), _tx).await {
+                    Ok(Err(step)) => {
+                        assert_eq!(step, 1);
+                    }
+                    Ok(Ok(step)) => {
+                        panic!("unexpected ok in step={}", step);
+                    }
+                    Err(_) => {
+                        panic!("tokio timeout");
+                    }
                 }
             }
         }
