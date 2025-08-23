@@ -26,8 +26,8 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn not_congest(&self) -> bool {
         match self {
-            RegistrySender::Single(_) => true,
             RegistrySender::Multi(inner) => inner.is_empty(),
+            RegistrySender::Single(_) => true,
             RegistrySender::Dummy => true,
         }
     }
@@ -37,8 +37,8 @@ impl<T> RegistrySender<T> {
         debug_assert_eq!(waker.get_state(), WakerState::Init as u8);
         // Clear the ptr in waker if it want to re-register
         match self {
-            RegistrySender::Single(inner) => inner.reg_waker(waker),
             RegistrySender::Multi(inner) => inner.reg_waker(waker),
+            RegistrySender::Single(inner) => inner.reg_waker(waker),
             _ => {}
         }
     }
@@ -57,7 +57,6 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn cancel_waker(&self, waker: &SendWaker<T>) {
         match self {
-            RegistrySender::Single(inner) => inner.cancel_waker(),
             RegistrySender::Multi(inner) => inner.clear_wakers(waker.get_seq(), true),
             _ => {}
         }
@@ -66,13 +65,13 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn fire(&self, shared: &ChannelShared<T>) -> WakeResult {
         match self {
+            RegistrySender::Multi(inner) => {
+                return inner.fire(|waker| shared.on_recv_try_send(waker));
+            }
             RegistrySender::Single(inner) => {
                 if let Some(waker) = inner.pop() {
                     return shared.on_recv_try_send(&waker);
                 }
-            }
-            RegistrySender::Multi(inner) => {
-                return inner.fire(|waker| shared.on_recv_try_send(waker));
             }
             _ => {}
         }
@@ -127,21 +126,21 @@ impl RegistryRecv {
     pub fn reg_waker(&self, waker: &RecvWaker) {
         debug_assert_eq!(waker.get_state(), WakerState::Init as u8);
         match self {
-            RegistryRecv::Single(inner) => inner.reg_waker(waker),
             RegistryRecv::Multi(inner) => inner.reg_waker(waker),
+            RegistryRecv::Single(inner) => inner.reg_waker(waker),
         }
     }
 
     #[inline(always)]
     pub fn fire(&self) {
         match self {
+            RegistryRecv::Multi(inner) => {
+                inner.fire(|waker| waker.wake());
+            }
             RegistryRecv::Single(inner) => {
                 if let Some(waker) = inner.pop() {
                     let _ = waker.wake();
                 }
-            }
-            RegistryRecv::Multi(inner) => {
-                inner.fire(|waker| waker.wake());
             }
         }
     }
@@ -159,8 +158,8 @@ impl RegistryRecv {
     #[inline(always)]
     pub fn cancel_waker(&self, waker: &RecvWaker) {
         match self {
-            RegistryRecv::Single(inner) => inner.cancel_waker(),
             RegistryRecv::Multi(inner) => inner.clear_wakers(waker.get_seq(), true),
+            _ => {}
         }
     }
 
