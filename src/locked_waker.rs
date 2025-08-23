@@ -1,4 +1,3 @@
-use crate::backoff::*;
 use crate::collections::ArcCell;
 use std::cell::UnsafeCell;
 use std::fmt;
@@ -35,6 +34,12 @@ pub enum WakeResult {
 pub struct ChannelWaker<P>(Arc<WakerInner<P>>);
 
 impl<P> fmt::Debug for ChannelWaker<P> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<P> fmt::Debug for WakerInner<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "waker({} state={})", self.get_seq(), self.get_state())
     }
@@ -192,30 +197,13 @@ impl<P> WakerInner<P> {
     /// Done: the message actually sent, nothing to DO
     /// Waked: the future should drop message, and waked another counterpart.
     #[inline(always)]
-    pub fn abandon(&self) -> u8 {
-        // it will content with close() and on_recv()
-        let mut backoff = Backoff::new(BackoffConfig::default());
-        loop {
-            match self.state.compare_exchange(
-                WakerState::Waiting as u8,
-                WakerState::Closed as u8,
-                Ordering::SeqCst,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => return WakerState::Closed as u8,
-                Err(s) => {
-                    if s >= WakerState::Waked as u8 {
-                        return s;
-                    }
-                    if s == WakerState::Init as u8 {
-                        // Not expect to call abandon in Init state, just defensive against
-                        // a dead loop
-                        return s;
-                    }
-                } // If Copying, will wait until complete
-            }
-            backoff.snooze();
+    pub fn abandon(&self) -> Result<(), u8> {
+        // it will content with close(), on_recv(), on_send()
+        match self.change_state_smaller_eq(WakerState::Waiting, WakerState::Closed) {
+            Ok(_) => Ok(()),
+            Err(state) => Err(state),
         }
+        // NOTE: there's no Copy state, so we do not loop
     }
 
     #[inline(always)]
@@ -277,7 +265,9 @@ impl<P> WakerInner<P> {
                     return WakeResult::Next;
                 }
             }
-            Err(_) => return WakeResult::Next,
+            Err(_s) => {
+                return WakeResult::Next;
+            }
         }
     }
 

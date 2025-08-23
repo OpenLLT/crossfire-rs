@@ -198,45 +198,41 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         }
         let mut _waker;
         let mut state;
-        let mut backoff: Option<Backoff> = None;
-        macro_rules! process_state {
-            ($state: expr) => {{
-                let _ = o_waker.take();
-                if $state == WakerState::Done as u8 {
-                    // receiver done it's job
-                    Poll::Ready(Ok(()))
-                } else {
-                    debug_assert_eq!($state, WakerState::Closed as u8);
-                    Poll::Ready(Err(()))
-                }
-            }};
-        }
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         loop {
             if let Some(waker) = o_waker.as_ref() {
                 state = waker.get_state_strict();
-                if state < WakerState::Waked as u8 {
-                    // Spurious waked by runtime, or
-                    // Normally only selection or multiplex future will get here.
-                    // No need to reg again, since waker is not consumed.
-                    (state, *o_waker) = shared.sender_try_again_async(o_waker.take().unwrap(), ctx);
-                    if state < WakerState::Waked as u8 {
+                if state == WakerState::Closed as u8 {
+                    return Poll::Ready(Err(()));
+                } else if state < WakerState::Waked as u8 {
+                    if waker.will_wake(ctx) {
+                        // Normally only selection or multiplex future will get here.
+                        // No need to reg again, since waker is not consumed.
                         return Poll::Pending;
+                    } else {
+                        // Spurious waked by runtime
+                        match waker.abandon() {
+                            Ok(_) => {
+                                self.senders.cancel_waker(&waker);
+                                let _ = o_waker.take();
+                            }
+                            Err(state) => {
+                                if state == WakerState::Closed as u8 {
+                                    let _ = o_waker.take();
+                                    return Poll::Ready(Err(()));
+                                }
+                                // waker is waked, can be reused
+                            }
+                        }
                     }
                 }
-                if state > WakerState::Waked as u8 {
-                    return process_state!(state);
-                } else {
-                    debug_assert_eq!(state, WakerState::Waked as u8);
-                    if shared.send(item) {
-                        shared.on_send();
-                        let _ = o_waker.take();
-                        return Poll::Ready(Ok(()));
-                    }
+                if shared.send(item) {
+                    shared.on_send();
+                    let _ = o_waker.take();
+                    return Poll::Ready(Ok(()));
                 }
-                // register again
             } else {
                 if shared.send(item) {
                     shared.on_send();
@@ -257,7 +253,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                         break;
                     }
                 }
-                backoff.replace(_backoff);
             }
             let waker = if let Some(w) = o_waker.take() {
                 w.set_state(WakerState::Init);
@@ -271,7 +266,13 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             if state < WakerState::Waked as u8 {
                 return Poll::Pending;
             } else if state > WakerState::Waked as u8 {
-                return process_state!(state);
+                let _ = o_waker.take();
+                if state == WakerState::Done as u8 {
+                    return Poll::Ready(Ok(()));
+                } else {
+                    debug_assert_eq!(state, WakerState::Closed as u8);
+                    return Poll::Ready(Err(()));
+                }
             }
             debug_assert_eq!(state, WakerState::Waked as u8);
             continue;
