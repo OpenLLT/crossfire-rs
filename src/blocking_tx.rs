@@ -153,9 +153,7 @@ impl<T: Send + 'static> Tx<T> {
             // For nxn (the backoff is already complete), wait a little bit.
             (state, o_waker) = shared.sender_reg_and_try(&mut _item, waker, false);
             while state < WakerState::Waked as u8 {
-                if backoff_cfg.spin_limit == 0 && direct_copy_ptr == std::ptr::null_mut() {
-                    // Save some cpu on VM for 8x8, 16x16
-                } else {
+                if direct_copy_ptr != std::ptr::null_mut() {
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
                 }
                 if state == WakerState::Waiting as u8 {
