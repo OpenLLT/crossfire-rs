@@ -43,21 +43,22 @@ impl<T> RegistrySender<T> {
         }
     }
 
+    /// Cancel outdated wakers until me, make sure it does not accumulate
     #[inline(always)]
-    pub fn clear_wakers(&self, seq: usize) {
+    pub fn clear_wakers(&self, waker: &SendWaker<T>) {
         match self {
-            RegistrySender::Single(inner) => inner.clear_wakers(seq),
-            RegistrySender::Multi(inner) => inner.clear_wakers(seq),
+            RegistrySender::Single(inner) => inner.cancel_waker(),
+            RegistrySender::Multi(inner) => inner.clear_wakers(waker.get_seq(), false),
             _ => {}
         }
     }
 
-    /// cancel one outdated waker, make sure it does not accumulate
+    /// Cancel one outdated waker, make sure it does not accumulate
     #[inline(always)]
     pub fn cancel_waker(&self, waker: &SendWaker<T>) {
         match self {
             RegistrySender::Single(inner) => inner.cancel_waker(),
-            RegistrySender::Multi(inner) => inner.clear_wakers(waker.get_seq()),
+            RegistrySender::Multi(inner) => inner.clear_wakers(waker.get_seq(), true),
             _ => {}
         }
     }
@@ -113,6 +114,7 @@ impl RegistryRecv {
         Self::Multi(RegistryMulti::<()>::new())
     }
 
+    #[allow(dead_code)]
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         match self {
@@ -144,11 +146,12 @@ impl RegistryRecv {
         }
     }
 
+    /// cancel outdated wakers until me, make sure it does not accumulate
     #[inline(always)]
-    pub fn clear_wakers(&self, seq: usize) {
+    pub fn clear_wakers(&self, waker: &RecvWaker) {
         match self {
-            RegistryRecv::Single(inner) => inner.clear_wakers(seq),
-            RegistryRecv::Multi(inner) => inner.clear_wakers(seq),
+            RegistryRecv::Single(inner) => inner.cancel_waker(),
+            RegistryRecv::Multi(inner) => inner.clear_wakers(waker.get_seq(), false),
         }
     }
 
@@ -157,7 +160,7 @@ impl RegistryRecv {
     pub fn cancel_waker(&self, waker: &RecvWaker) {
         match self {
             RegistryRecv::Single(inner) => inner.cancel_waker(),
-            RegistryRecv::Multi(inner) => inner.clear_wakers(waker.get_seq()),
+            RegistryRecv::Multi(inner) => inner.clear_wakers(waker.get_seq(), true),
         }
     }
 
@@ -202,12 +205,6 @@ impl<P> RegistrySingle<P> {
 
     #[inline(always)]
     fn cancel_waker(&self) {
-        // Got to be it, because only one single thread.
-        self.cell.clear();
-    }
-
-    #[inline(always)]
-    fn clear_wakers(&self, _seq: usize) {
         // Got to be it, because only one single thread.
         self.cell.clear();
     }
@@ -323,7 +320,7 @@ impl<P> RegistryMulti<P> {
 
     /// Call when waker is cancelled
     #[inline(always)]
-    fn clear_wakers(&self, seq: usize) {
+    fn clear_wakers(&self, seq: usize, oneshot: bool) {
         if self.is_empty.load(Ordering::SeqCst) {
             return;
         }
@@ -337,25 +334,41 @@ impl<P> RegistryMulti<P> {
                     } else {
                         // There might be later waker cancel due to success sending before commit_waiting.
                         // While earlier waker is still waiting.
-                        if waker.get_state_strict() < WakerState::Waked as u8 {
+                        let state = waker.get_state_strict();
+                        if state == WakerState::Init as u8 {
+                            let _ = waker.wake();
+                            if oneshot {
+                                true
+                            } else {
+                                false
+                            }
+                        } else if state == WakerState::Waiting as u8 {
                             guard.queue.push_front($weak);
                             return;
+                        } else {
+                            false
                         }
-                        true
                     }
                 } else {
-                    if guard.queue.is_empty() {
-                        self.is_empty.store(true, Ordering::SeqCst);
-                    }
-                    return;
+                    false
                 }
             }};
         }
         if let Some(weak) = guard.queue.pop_front() {
-            process!(weak);
+            if process!(weak) {
+                if guard.queue.is_empty() {
+                    self.is_empty.store(true, Ordering::SeqCst);
+                }
+                return;
+            }
             loop {
                 if let Some(weak) = guard.queue.pop_front() {
-                    process!(weak);
+                    if process!(weak) {
+                        if guard.queue.is_empty() {
+                            self.is_empty.store(true, Ordering::SeqCst);
+                        }
+                        return;
+                    }
                 } else {
                     self.is_empty.store(true, Ordering::SeqCst);
                     return;
@@ -393,61 +406,78 @@ mod tests {
     use crate::locked_waker::RecvWaker;
     #[test]
     fn test_registry_multi() {
-        let reg = RegistryRecv::Multi(RegistryMulti::new());
+        let reg = RegistryMulti::new();
 
         // test push
-        let waker1 = RecvWaker::new_blocking();
+        let waker1 = RecvWaker::new_blocking(());
         assert_eq!(reg.is_empty(), true);
-        waker1.set_state(WakerState::Waked);
+        waker1.set_state(WakerState::Init);
         reg.reg_waker(&waker1);
         assert_eq!(waker1.get_state(), WakerState::Init as u8);
-        assert!(waker1.get_seq() > 0);
+        assert_eq!(waker1.get_seq(), 0);
         assert_eq!(reg.is_empty(), false);
         assert_eq!(reg.len(), 1);
-        assert_eq!(waker1.is_waked(), false);
 
-        let waker2 = RecvWaker::new_blocking();
+        let waker2 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker2);
+        waker2.set_state(WakerState::Waiting);
+        assert_eq!(waker2.get_seq(), 1);
         assert_eq!(reg.len(), 2);
         assert_eq!(waker2.get_seq(), waker1.get_seq() + 1);
-        assert_eq!(waker2.is_waked(), false);
+        assert_eq!(waker2.get_state(), WakerState::Waiting as u8);
 
         if let Some(w) = reg.pop() {
-            assert!(w.wake().is_ok());
+            assert!(w.wake() == WakeResult::Next);
         }
-        assert_eq!(waker1.is_waked(), true);
+        assert_eq!(waker1.get_state(), WakerState::Waked as u8);
         assert_eq!(reg.len(), 1);
         assert_eq!(reg.is_empty(), false);
         if let Some(w) = reg.pop() {
-            assert!(w.wake().is_ok());
+            assert!(w.wake() == WakeResult::Waked);
         }
-        assert_eq!(waker2.is_waked(), true);
+        assert_eq!(waker2.get_state(), WakerState::Waked as u8);
         assert_eq!(reg.len(), 0);
         assert_eq!(reg.is_empty(), true);
 
         // test seq
 
-        let waker3 = RecvWaker::new_blocking();
+        let waker3 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker3);
-        let waker4 = RecvWaker::new_blocking();
-        reg.reg_waker(&waker4);
-        waker4.set_state(WakerState::Waiting);
+        waker3.set_state(WakerState::Waiting);
+        assert_eq!(waker3.get_state(), WakerState::Waiting as u8);
+        let waker4 = RecvWaker::new_blocking(());
+        reg.reg_waker(&waker4); // Init
+        assert_eq!(waker4.get_state(), WakerState::Init as u8);
+        let num_workers = reg.len();
+        // Because waker3 not waked up, waker4 is not clear
+        reg.clear_wakers(waker4.get_seq(), false);
+        assert_eq!(reg.len(), num_workers);
         for _ in 0..10 {
-            let _waker = RecvWaker::new_blocking();
+            let _waker = RecvWaker::new_blocking(());
             reg.reg_waker(&_waker);
         }
-        assert_eq!(reg.len(), 12);
-        assert_eq!(waker4.abandon(), WakerState::Closed as u8);
-        reg.clear_wakers(waker4.get_seq());
-        assert_eq!(reg.len(), 10);
-        assert!(waker3.is_waked());
-        assert!(waker4.is_waked());
+        let num_workers = reg.len();
+        assert_eq!(reg.len(), num_workers);
+        waker3.set_state(WakerState::Init);
+        assert_eq!(waker4.abandon(), WakerState::Init as u8); // abandon does no effect on Init
+        println!("clear waker4 oneshot seq {}", waker4.get_seq());
+        reg.clear_wakers(waker4.get_seq(), true); // oneshot only clear waker3
+        assert_eq!(reg.len(), num_workers - 1);
+        assert!(waker3.get_state() >= WakerState::Waked as u8);
+        assert_eq!(waker4.get_state(), WakerState::Init as u8);
+        let waker5 = RecvWaker::new_blocking(());
+        reg.reg_waker(&waker5);
+        println!("clear waker5 seq={}", waker5.get_seq());
+        reg.clear_wakers(waker5.get_seq(), false); // clear waker4, waker5
+        assert_eq!(reg.len(), 0);
 
-        // test close
-        assert_eq!(reg.is_empty(), false);
-        while let Some(waker) = reg.pop() {
-            waker.close_wake();
+        println!("test close");
+        for _ in 0..10 {
+            let _waker = RecvWaker::new_blocking(());
+            reg.reg_waker(&_waker);
         }
+        assert_eq!(reg.is_empty(), false);
+        reg.close();
         assert_eq!(reg.len(), 0);
         assert_eq!(reg.is_empty(), true);
     }
