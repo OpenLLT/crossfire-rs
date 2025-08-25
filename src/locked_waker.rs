@@ -232,6 +232,7 @@ impl<P> WakerInner<P> {
     pub fn change_state_smaller_eq(
         &self, condition: WakerState, target: WakerState,
     ) -> Result<u8, u8> {
+        debug_assert!((condition as u8) < (target as u8));
         // Save one load()
         let mut state = condition as u8;
         loop {
