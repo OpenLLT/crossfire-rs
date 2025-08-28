@@ -338,7 +338,7 @@ impl<P> RegistryMulti<P> {
                     } else {
                         // There might be later waker cancel due to success sending before commit_waiting.
                         // While earlier waker is still waiting.
-                        let state = waker.get_state_strict();
+                        let state = waker.get_state();
                         if state == WakerState::Init as u8 {
                             let _ = waker.wake();
                             if oneshot {

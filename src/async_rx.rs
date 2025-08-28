@@ -207,7 +207,7 @@ impl<T> AsyncRx<T> {
         }
         loop {
             if let Some(waker) = o_waker.as_ref() {
-                let mut state = waker.get_state_strict();
+                let mut state = waker.get_state();
                 if state < WakerState::Waked as u8 {
                     if waker.will_wake(ctx) {
                         // Spurious waked by runtime, or

@@ -143,7 +143,7 @@ impl<T> Rx<T> {
                             return Err(RecvTimeoutError::Timeout);
                         }
                     }
-                    state = waker.get_state_strict();
+                    state = waker.get_state();
                 }
                 if state == WakerState::Closed as u8 {
                     break 'MAIN;

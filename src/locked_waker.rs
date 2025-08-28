@@ -245,12 +245,12 @@ impl<P> WakerInner<P> {
 
     #[inline(always)]
     pub fn get_state(&self) -> u8 {
-        self.state.load(Ordering::Acquire)
+        self.state.load(Ordering::SeqCst)
     }
 
     #[inline(always)]
-    pub fn get_state_strict(&self) -> u8 {
-        self.state.load(Ordering::SeqCst)
+    pub fn get_state_relaxed(&self) -> u8 {
+        self.state.load(Ordering::Relaxed)
     }
 
     /// Assume no lock

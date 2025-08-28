@@ -280,7 +280,7 @@ impl<T> ChannelShared<T> {
     pub(crate) fn sender_snooze(&self, waker: &SendWaker<T>, backoff: &mut Backoff) -> u8 {
         backoff.reset();
         loop {
-            let state = waker.get_state();
+            let state = waker.get_state_relaxed();
             if state >= WakerState::Waked as u8 {
                 return state;
             }

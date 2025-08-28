@@ -210,7 +210,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // to skip the timeout cleaning logic in Drop.
         loop {
             if let Some(waker) = o_waker.as_ref() {
-                state = waker.get_state_strict();
+                state = waker.get_state();
                 if state == WakerState::Closed as u8 {
                     return Poll::Ready(Err(()));
                 } else if state < WakerState::Waked as u8 {
