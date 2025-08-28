@@ -157,22 +157,22 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     pub(crate) fn add_tx(&self) {
-        let _ = self.tx_count.fetch_add(1, Ordering::SeqCst);
-        let _ = self.congest.fetch_add(1, Ordering::Release);
+        let _ = self.tx_count.fetch_add(1, Ordering::Acquire);
+        let _ = self.congest.fetch_add(1, Ordering::Acquire);
     }
 
     #[inline(always)]
     pub(crate) fn add_rx(&self) {
-        let _ = self.rx_count.fetch_add(1, Ordering::SeqCst);
-        let _ = self.congest.fetch_sub(1, Ordering::Release);
+        let _ = self.rx_count.fetch_add(1, Ordering::Acquire);
+        let _ = self.congest.fetch_sub(1, Ordering::Acquire);
     }
 
     /// Call when tx drop
     #[inline(always)]
     pub(crate) fn close_tx(&self) {
-        let _ = self.congest.fetch_sub(1, Ordering::Release);
-        if self.tx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
-            self.closed.store(true, Ordering::SeqCst);
+        let _ = self.congest.fetch_sub(1, Ordering::Relaxed);
+        if self.tx_count.fetch_sub(1, Ordering::Release) <= 1 {
+            self.closed.store(true, Ordering::SeqCst); // serve as fence
             self._close_all();
         }
     }
@@ -180,9 +180,9 @@ impl<T> ChannelShared<T> {
     /// Call when rx drop
     #[inline(always)]
     pub(crate) fn close_rx(&self) {
-        let _ = self.congest.fetch_add(1, Ordering::Release);
-        if self.rx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
-            self.closed.store(true, Ordering::SeqCst);
+        let _ = self.congest.fetch_add(1, Ordering::Relaxed);
+        if self.rx_count.fetch_sub(1, Ordering::Release) <= 1 {
+            self.closed.store(true, Ordering::SeqCst); // serve as fence
             self._close_all();
         }
     }
