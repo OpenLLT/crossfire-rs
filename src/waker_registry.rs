@@ -53,7 +53,7 @@ impl<T> RegistrySender<T> {
     pub fn clear_wakers(&self, waker: &SendWaker<T>) {
         match self {
             RegistrySender::Single(inner) => inner.cancel_waker(),
-            RegistrySender::Multi(inner) => inner.clear_wakers(waker.get_seq(), false),
+            RegistrySender::Multi(inner) => inner.clear_wakers(waker, false),
             _ => {}
         }
     }
@@ -62,7 +62,7 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn cancel_waker(&self, waker: &SendWaker<T>) {
         match self {
-            RegistrySender::Multi(inner) => inner.clear_wakers(waker.get_seq(), true),
+            RegistrySender::Multi(inner) => inner.clear_wakers(waker, true),
             _ => {}
         }
     }
@@ -155,7 +155,7 @@ impl RegistryRecv {
     pub fn clear_wakers(&self, waker: &RecvWaker) {
         match self {
             RegistryRecv::Single(inner) => inner.cancel_waker(),
-            RegistryRecv::Multi(inner) => inner.clear_wakers(waker.get_seq(), false),
+            RegistryRecv::Multi(inner) => inner.clear_wakers(waker, false),
         }
     }
 
@@ -163,7 +163,7 @@ impl RegistryRecv {
     #[inline(always)]
     pub fn cancel_waker(&self, waker: &RecvWaker) {
         match self {
-            RegistryRecv::Multi(inner) => inner.clear_wakers(waker.get_seq(), true),
+            RegistryRecv::Multi(inner) => inner.clear_wakers(waker, true),
             _ => {}
         }
     }
@@ -324,16 +324,16 @@ impl<P> RegistryMulti<P> {
 
     /// Call when waker is cancelled
     #[inline(always)]
-    fn clear_wakers(&self, seq: usize, oneshot: bool) {
+    fn clear_wakers(&self, old_waker: &ChannelWaker<P>, oneshot: bool) {
         if self.is_empty.load(Ordering::SeqCst) {
             return;
         }
-        let mut guard = self.inner.lock();
+        let old_seq = old_waker.get_seq();
         macro_rules! process {
-            ($weak: expr) => {{
+            ($guard: expr, $weak: expr) => {{
                 if let Some(waker) = $weak.upgrade() {
                     let _seq = waker.get_seq();
-                    if _seq == seq {
+                    if _seq == old_seq {
                         true
                     } else {
                         // There might be later waker cancel due to success sending before commit_waiting.
@@ -343,11 +343,13 @@ impl<P> RegistryMulti<P> {
                             let _ = waker.wake();
                             if oneshot {
                                 true
+                            } else if _seq > old_seq {
+                                true
                             } else {
                                 false
                             }
                         } else if state == WakerState::Waiting as u8 {
-                            guard.queue.push_front($weak);
+                            $guard.queue.push_front($weak);
                             return;
                         } else {
                             false
@@ -358,8 +360,9 @@ impl<P> RegistryMulti<P> {
                 }
             }};
         }
+        let mut guard = self.inner.lock();
         if let Some(weak) = guard.queue.pop_front() {
-            if process!(weak) {
+            if process!(guard, weak) {
                 if guard.queue.is_empty() {
                     self.is_empty.store(true, Ordering::SeqCst);
                 }
@@ -367,7 +370,7 @@ impl<P> RegistryMulti<P> {
             }
             loop {
                 if let Some(weak) = guard.queue.pop_front() {
-                    if process!(weak) {
+                    if process!(guard, weak) {
                         if guard.queue.is_empty() {
                             self.is_empty.store(true, Ordering::SeqCst);
                         }
@@ -454,7 +457,7 @@ mod tests {
         assert_eq!(waker4.get_state(), WakerState::Init as u8);
         let num_workers = reg.len();
         // Because waker3 not waked up, waker4 is not clear
-        reg.clear_wakers(waker4.get_seq(), false);
+        reg.clear_wakers(&waker4, false);
         assert_eq!(reg.len(), num_workers);
         for _ in 0..10 {
             let _waker = RecvWaker::new_blocking(());
@@ -465,14 +468,14 @@ mod tests {
         waker3.set_state(WakerState::Init);
         //        assert!(waker4.abandon().is_ok());
         println!("clear waker4 oneshot seq {}", waker4.get_seq());
-        reg.clear_wakers(waker4.get_seq(), true); // oneshot only clear waker3
+        reg.clear_wakers(&waker4, true); // oneshot only clear waker3
         assert_eq!(reg.len(), num_workers - 1);
         assert!(waker3.get_state() >= WakerState::Waked as u8);
         assert_eq!(waker4.get_state(), WakerState::Init as u8);
         let waker5 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker5);
         println!("clear waker5 seq={}", waker5.get_seq());
-        reg.clear_wakers(waker5.get_seq(), false); // clear waker4, waker5
+        reg.clear_wakers(&waker5, false); // clear waker4, waker5
         assert_eq!(reg.len(), 0);
 
         println!("test close");
