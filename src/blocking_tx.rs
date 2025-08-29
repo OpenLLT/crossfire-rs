@@ -77,18 +77,10 @@ impl<T> From<AsyncTx<T>> for Tx<T> {
 
 impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
-    pub(crate) fn _send_blocking(
-        &self, item: T, deadline: Option<Instant>,
+    pub(crate) fn _send_bounded(
+        &self, mut item: MaybeUninit<T>, deadline: Option<Instant>,
     ) -> Result<(), SendTimeoutError<T>> {
         let shared = &self.shared;
-        if shared.is_disconnected() {
-            return Err(SendTimeoutError::Disconnected(item));
-        }
-        let mut _item = MaybeUninit::new(item);
-        if shared.send(&_item) {
-            shared.on_send();
-            return Ok(());
-        }
         let large = shared.bound_size.unwrap() > 10;
         let backoff_cfg = BackoffConfig::default().spin(2).limit(7);
         let mut backoff = Backoff::new(backoff_cfg);
@@ -99,7 +91,7 @@ impl<T: Send + 'static> Tx<T> {
         loop {
             let r = if large { backoff.yield_now() } else { backoff.spin() };
             if direct_copy && large {
-                match shared.try_send_oneshot(&_item) {
+                match shared.try_send_oneshot(item.as_ptr()) {
                     Some(false) => break,
                     None => {
                         if r {
@@ -114,7 +106,7 @@ impl<T: Send + 'static> Tx<T> {
                     }
                 }
             } else {
-                if !shared.send(&_item) {
+                if false == shared.send(&item) {
                     if r {
                         break;
                     }
@@ -125,7 +117,7 @@ impl<T: Send + 'static> Tx<T> {
             }
         }
         let direct_copy_ptr: *mut T =
-            if direct_copy { _item.as_mut_ptr() } else { std::ptr::null_mut() };
+            if direct_copy { item.as_mut_ptr() } else { std::ptr::null_mut() };
 
         let mut state: u8;
         let mut o_waker: Option<SendWaker<T>> = None;
@@ -151,7 +143,7 @@ impl<T: Send + 'static> Tx<T> {
             // For nx1 (more likely congest), need to reset backoff
             // to allow more yield to receivers.
             // For nxn (the backoff is already complete), wait a little bit.
-            (state, o_waker) = shared.sender_reg_and_try(&mut _item, waker, false);
+            (state, o_waker) = shared.sender_reg_and_try(&mut item, waker, false);
             while state < WakerState::Waked as u8 {
                 if direct_copy_ptr != std::ptr::null_mut() {
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
@@ -167,9 +159,10 @@ impl<T: Send + 'static> Tx<T> {
                         Err(_) => {
                             if shared.abandon_send_waker(o_waker.take().unwrap()) {
                                 return Err(SendTimeoutError::Timeout(unsafe {
-                                    _item.assume_init_read()
+                                    item.assume_init_read()
                                 }));
                             } else {
+                                // NOTE: Unlikely since we disable direct copy with deadline
                                 // state is WakerState::Done
                                 return Ok(());
                             }
@@ -183,7 +176,7 @@ impl<T: Send + 'static> Tx<T> {
             } else if state == WakerState::Waked as u8 {
                 backoff.reset();
                 loop {
-                    if shared.send(&_item) {
+                    if shared.send(&item) {
                         shared.on_send();
                         return_ok!();
                     }
@@ -193,7 +186,7 @@ impl<T: Send + 'static> Tx<T> {
                     backoff.snooze();
                 }
             } else if state == WakerState::Closed as u8 {
-                return Err(SendTimeoutError::Disconnected(unsafe { _item.assume_init_read() }));
+                return Err(SendTimeoutError::Disconnected(unsafe { item.assume_init_read() }));
             }
         }
     }
@@ -206,10 +199,28 @@ impl<T: Send + 'static> Tx<T> {
     ///
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        match self._send_blocking(item, None) {
-            Ok(_) => return Ok(()),
-            Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
-            Err(SendTimeoutError::Timeout(_)) => unreachable!(),
+        let shared = &self.shared;
+        if shared.is_disconnected() {
+            return Err(SendError(item));
+        }
+        match &shared.inner {
+            Channel::Array(inner) => {
+                let mut _item = MaybeUninit::new(item);
+                if unsafe { inner.push_with_ptr(_item.as_ptr()) } {
+                    shared.on_send();
+                    return Ok(());
+                }
+                match self._send_bounded(_item, None) {
+                    Ok(_) => return Ok(()),
+                    Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
+                    Err(SendTimeoutError::Timeout(_)) => unreachable!(),
+                }
+            }
+            Channel::List(inner) => {
+                inner.push(item);
+                shared.on_send();
+                return Ok(());
+            }
         }
     }
 
@@ -225,9 +236,6 @@ impl<T: Send + 'static> Tx<T> {
         let shared = &self.shared;
         if shared.is_disconnected() {
             return Err(TrySendError::Disconnected(item));
-        }
-        if shared.is_zero() {
-            todo!();
         }
         let _item = MaybeUninit::new(item);
         if shared.send(&_item) {
@@ -250,12 +258,33 @@ impl<T: Send + 'static> Tx<T> {
     /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
     #[inline]
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
-        match Instant::now().checked_add(timeout) {
-            Some(deadline) => self._send_blocking(item, Some(deadline)),
-            None => self.try_send(item).map_err(|e| match e {
-                TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
-                TrySendError::Full(t) => SendTimeoutError::Timeout(t),
-            }),
+        let shared = &self.shared;
+        if shared.is_disconnected() {
+            return Err(SendTimeoutError::Disconnected(item));
+        }
+        match &shared.inner {
+            Channel::Array(inner) => match Instant::now().checked_add(timeout) {
+                None => self.try_send(item).map_err(|e| match e {
+                    TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
+                    TrySendError::Full(t) => SendTimeoutError::Timeout(t),
+                }),
+                Some(deadline) => {
+                    let mut _item = MaybeUninit::new(item);
+                    if unsafe { inner.push_with_ptr(_item.as_ptr()) } {
+                        shared.on_send();
+                        return Ok(());
+                    }
+                    match self._send_bounded(_item, Some(deadline)) {
+                        Ok(_) => return Ok(()),
+                        Err(e) => return Err(e),
+                    }
+                }
+            },
+            Channel::List(inner) => {
+                inner.push(item);
+                shared.on_send();
+                return Ok(());
+            }
         }
     }
 }

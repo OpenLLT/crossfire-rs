@@ -65,7 +65,7 @@ pub struct ChannelShared<T> {
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
     pub(crate) congest: AtomicIsize,
-    inner: Channel<T>,
+    pub(crate) inner: Channel<T>,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
     pub(crate) bound_size: Option<u32>,
@@ -212,12 +212,11 @@ impl<T> ChannelShared<T> {
         }
     }
 
-    #[allow(dead_code)]
     #[inline]
-    pub(crate) fn try_send_oneshot(&self, item: &MaybeUninit<T>) -> Option<bool> {
+    pub(crate) fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
         match &self.inner {
             Channel::Array(inner) => {
-                return unsafe { inner.try_push_oneshot(item.as_ptr()) };
+                return unsafe { inner.try_push_oneshot(item) };
             }
             Channel::List(_inner) => {
                 unreachable!();
@@ -233,7 +232,7 @@ impl<T> ChannelShared<T> {
     ) -> (u8, Option<SendWaker<T>>) {
         self.senders.reg_waker(&waker);
         // Not allow Spurious wake and enter this function again;
-        if let Some(res) = self.try_send_oneshot(item) {
+        if let Some(res) = self.try_send_oneshot(item.as_ptr()) {
             if res {
                 waker.set_state(WakerState::Done);
                 self.senders.cancel_waker(&waker);
