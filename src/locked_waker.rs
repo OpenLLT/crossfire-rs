@@ -25,7 +25,6 @@ pub enum WakerState {
 pub enum WakeResult {
     Sent,
     Next,
-    PushBack,
     Waked,
 }
 
@@ -256,17 +255,29 @@ impl<P> WakerInner<P> {
     /// Assume no lock
     #[inline(always)]
     pub fn wake(&self) -> WakeResult {
-        match self.change_state_smaller_eq(WakerState::Waiting, WakerState::Waked) {
-            Ok(state) => {
-                self._wake_nolock();
-                if state == WakerState::Waiting as u8 {
-                    return WakeResult::Waked;
-                } else {
-                    return WakeResult::Next;
-                }
-            }
-            Err(_s) => {
+        let mut state = self.get_state_relaxed();
+        loop {
+            if state >= WakerState::Waked as u8 {
                 return WakeResult::Next;
+            } else if state == WakerState::Waiting as u8 {
+                self.state.store(WakerState::Waked as u8, Ordering::SeqCst);
+                self._wake_nolock();
+                return WakeResult::Waked;
+            } else {
+                match self.state.compare_exchange_weak(
+                    WakerState::Init as u8,
+                    WakerState::Waked as u8,
+                    Ordering::SeqCst,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        self._wake_nolock();
+                        return WakeResult::Next;
+                    }
+                    Err(s) => {
+                        state = s;
+                    }
+                }
             }
         }
     }
@@ -297,9 +308,9 @@ impl<P> WakerInner<P> {
         }
     }
 
-    // Assume have lock
+    // Assume the state change have proper fence
     #[inline(always)]
-    pub fn _wake_nolock(&self) {
+    fn _wake_nolock(&self) {
         match self.get_waker() {
             WakerType::Async(w) => w.wake_by_ref(),
             WakerType::Blocking(th) => th.unpark(),
@@ -314,17 +325,29 @@ impl<T> WakerInner<*mut T> {
     }
 
     #[inline(always)]
-    pub fn wake_or_copy(&self) -> Result<WakeResult, *mut T> {
-        let p = self.get_payload();
-        if p == std::ptr::null_mut() {
-            return Ok(self.wake());
-        }
-        let mut state = self.state.load(Ordering::SeqCst);
+    pub fn wake_or_copy<F>(&self, copy_f: F) -> WakeResult
+    where
+        F: FnOnce(*const T) -> u8,
+    {
+        let mut state = self.get_state();
         loop {
             if state >= WakerState::Waked as u8 {
-                return Ok(WakeResult::Next);
+                return WakeResult::Next;
             } else if state == WakerState::Waiting as u8 {
-                return Err(p);
+                let p = self.get_payload();
+                if p == std::ptr::null_mut() {
+                    self.state.store(WakerState::Waked as u8, Ordering::SeqCst);
+                    self._wake_nolock();
+                    return WakeResult::Waked;
+                }
+                state = copy_f(p as *const T);
+                self.state.store(state as u8, Ordering::SeqCst);
+                self._wake_nolock();
+                if state == WakerState::Done as u8 {
+                    return WakeResult::Sent;
+                } else {
+                    return WakeResult::Waked;
+                }
             } else {
                 match self.state.compare_exchange_weak(
                     WakerState::Init as u8,
@@ -334,7 +357,7 @@ impl<T> WakerInner<*mut T> {
                 ) {
                     Ok(_) => {
                         self._wake_nolock();
-                        return Ok(WakeResult::Next);
+                        return WakeResult::Next;
                     }
                     Err(s) => {
                         state = s;

@@ -306,26 +306,17 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*mut T>) -> WakeResult {
-        match waker.wake_or_copy() {
-            Ok(r) => return r,
-            Err(p) => {
-                // There won't be direct copy when timeout and async,
-                // so it's safe to proceed without a COPY state, saving an atomic OP
-                if let Channel::Array(inner) = &self.inner {
-                    if unsafe { inner.push_with_ptr(p) } {
-                        waker.set_state(WakerState::Done);
-                        waker._wake_nolock();
-                        return WakeResult::Sent;
-                    } else {
-                        waker.set_state(WakerState::Waked);
-                        waker._wake_nolock();
-                        return WakeResult::PushBack;
-                    }
+        waker.wake_or_copy(|p: *const T| -> u8 {
+            if let Channel::Array(inner) = &self.inner {
+                if unsafe { inner.push_with_ptr(p) } {
+                    WakerState::Done as u8
                 } else {
-                    unreachable!();
+                    WakerState::Waked as u8
                 }
+            } else {
+                unreachable!();
             }
-        }
+        })
     }
 
     #[inline(always)]
