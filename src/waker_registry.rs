@@ -412,7 +412,7 @@ mod tests {
     use super::*;
     use crate::locked_waker::RecvWaker;
     #[test]
-    fn test_registry_multi() {
+    fn test_registry_multi_pop() {
         let reg = RegistryMulti::new();
 
         // test push
@@ -445,9 +445,12 @@ mod tests {
         assert_eq!(waker2.get_state(), WakerState::Waked as u8);
         assert_eq!(reg.len(), 0);
         assert_eq!(reg.is_empty(), true);
+    }
 
+    #[test]
+    fn test_registry_multi_clear_waiting() {
+        let reg = RegistryMulti::new();
         // test seq
-
         let waker3 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker3);
         waker3.set_state(WakerState::Waiting);
@@ -465,19 +468,55 @@ mod tests {
         }
         let num_workers = reg.len();
         assert_eq!(reg.len(), num_workers);
-        waker3.set_state(WakerState::Init);
-        //        assert!(waker4.abandon().is_ok());
+    }
+
+    #[test]
+    fn test_registry_multi_clear_oneshot() {
+        let reg = RegistryMulti::new();
+        // test seq
+        let waker3 = RecvWaker::new_blocking(());
+        reg.reg_waker(&waker3);
+        assert_eq!(waker3.get_state(), WakerState::Init as u8);
+        let waker4 = RecvWaker::new_blocking(());
+        reg.reg_waker(&waker4); // Init
+        waker4.set_state(WakerState::Waiting);
+        assert_eq!(waker4.get_state(), WakerState::Waiting as u8);
+        for _ in 0..10 {
+            let _waker = RecvWaker::new_blocking(());
+            reg.reg_waker(&_waker);
+        }
+        let num_workers = reg.len();
         println!("clear waker4 oneshot seq {}", waker4.get_seq());
         reg.clear_wakers(&waker4, true); // oneshot only clear waker3
         assert_eq!(reg.len(), num_workers - 1);
         assert!(waker3.get_state() >= WakerState::Waked as u8);
-        assert_eq!(waker4.get_state(), WakerState::Init as u8);
+        assert_eq!(waker4.get_state(), WakerState::Waiting as u8);
+    }
+
+    #[test]
+    fn test_registry_multi_clear() {
+        let reg = RegistryMulti::new();
+        // test seq
+        let waker3 = RecvWaker::new_blocking(());
+        reg.reg_waker(&waker3);
+        assert_eq!(waker3.get_state(), WakerState::Init as u8);
+        let waker4 = RecvWaker::new_blocking(());
+        reg.reg_waker(&waker4); // Init
+        drop(waker4); // waker4 is dropped, weak is left
+        for _ in 0..10 {
+            let _waker = RecvWaker::new_blocking(());
+            reg.reg_waker(&_waker);
+        }
         let waker5 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker5);
         println!("clear waker5 seq={}", waker5.get_seq());
         reg.clear_wakers(&waker5, false); // clear waker4, waker5
         assert_eq!(reg.len(), 0);
+    }
 
+    #[test]
+    fn test_registry_multi_close() {
+        let reg = RegistryMulti::new();
         println!("test close");
         for _ in 0..10 {
             let _waker = RecvWaker::new_blocking(());
