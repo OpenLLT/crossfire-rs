@@ -17,8 +17,8 @@ pub enum WakerState {
     Waiting = 1,
     //Copy = 2, // Omit due to skipping direct copy on async or with deadline
     Waked = 3,
-    Done = 4,
-    Closed = 5, // Channel closed, or timeout cancellation
+    Closed = 4, // Channel closed, or timeout cancellation
+    Done = 5,
 }
 
 #[derive(PartialEq, Debug)]
@@ -184,7 +184,12 @@ impl<P> WakerInner<P> {
         {
             if _state != WakerState::Closed as u8 {
                 let __state = self.get_state();
-                assert!(__state <= WakerState::Waked as u8, "unexpected state: {}", __state);
+                assert!(
+                    __state == WakerState::Waked as u8 || __state <= _state as u8,
+                    "unexpected set state {:?} on state: {}",
+                    _state,
+                    __state
+                );
             }
         }
         self.state.store(_state, Ordering::Release);
