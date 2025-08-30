@@ -68,6 +68,7 @@ pub struct ChannelShared<T> {
     pub(crate) inner: Channel<T>,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
+    pub(crate) large: bool,
     pub(crate) bound_size: Option<u32>,
 }
 
@@ -75,6 +76,16 @@ impl<T> ChannelShared<T> {
     pub(crate) fn new(
         inner: Channel<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
     ) -> Arc<Self> {
+        let bound_size;
+        let large;
+        if let Some(bound) = inner.capacity() {
+            bound_size = Some(bound as u32);
+            large = bound > 10;
+        } else {
+            bound_size = None;
+            large = false;
+        }
+
         Arc::new(Self {
             closed: AtomicBool::new(false),
             tx_count: AtomicUsize::new(1),
@@ -82,7 +93,8 @@ impl<T> ChannelShared<T> {
             congest: AtomicIsize::new(0),
             senders,
             recvs,
-            bound_size: if let Some(bound) = inner.capacity() { Some(bound as u32) } else { None },
+            bound_size,
+            large,
             inner,
         })
     }

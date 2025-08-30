@@ -81,7 +81,7 @@ impl<T: Send + 'static> Tx<T> {
         &self, mut item: MaybeUninit<T>, deadline: Option<Instant>,
     ) -> Result<(), SendTimeoutError<T>> {
         let shared = &self.shared;
-        let large = shared.bound_size.unwrap() > 10;
+        let large = shared.large;
         let backoff_cfg = BackoffConfig::default().spin(2).limit(7);
         let mut backoff = Backoff::new(backoff_cfg);
         let direct_copy = deadline.is_none() && shared.sender_direct_copy();
