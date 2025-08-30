@@ -110,11 +110,25 @@ impl<T> WeakCell<T> {
     }
 
     #[inline(always)]
-    pub fn clear(&self) {
-        let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
-        if ptr != ptr::null_mut() {
-            // Convert into Weak and drop
-            let _ = unsafe { Weak::from_raw(ptr) };
+    pub fn clear(&self) -> bool {
+        let v = self.ptr.load(Ordering::Acquire);
+        if v == ptr::null_mut() {
+            return false;
+        }
+        match self.ptr.compare_exchange_weak(
+            v,
+            ptr::null_mut(),
+            Ordering::SeqCst,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                let _ = unsafe { Weak::from_raw(v) };
+                return true;
+            }
+            Err(_v) => {
+                // We don't really have to clear this on spurious failure
+                return false;
+            }
         }
     }
 
