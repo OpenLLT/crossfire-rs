@@ -80,9 +80,14 @@ impl RegistryTrait for RegistrySingle {
     }
 
     #[inline(always)]
-    fn cancel_waker(&self, _waker: &LockedWaker) {
+    fn cancel_waker(&self, waker: &LockedWaker) {
         // Got to be it, because only one single thread.
-        // It's ok to ignore it, next time will be overwritten.
+        // Although it's ok to ignore it, next time will be overwritten,
+        // but miri is not happy about it
+        if waker.abandon() >= WakerState::WAKED as u8 {
+            return;
+        }
+        self.cell.clear();
     }
 
     #[inline(always)]
