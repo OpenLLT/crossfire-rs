@@ -55,18 +55,39 @@ test: init
 	@echo "Done"
 
 .PHONY: test
+test_log: init
+	@echo "Run test"
+	@${RUNTESTCASE}; FEATURE_FLAG="-F tokio,trace_log"; _run_test_case
+	@echo "Done"
+
+.PHONY: test
 test_async_std: init
 	@echo "Run test"
 	@${RUNTESTCASE}; FEATURE_FLAG="-F async_std"; _run_test_case
+	@echo "Done"
+
+.PHONY: test
+test_log_async_std: init
+	@echo "Run test"
+	@${RUNTESTCASE}; FEATURE_FLAG="-F async_std,trace_log"; _run_test_case
 	@echo "Done"
 
 .PHONY: test_release
 test_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F tokio"; _run_test_release_case
 
+.PHONY: test_log_release
+test_log_release:
+	@${RUNRELEASECASE}; FEATURE_FLAG="-F tokio,trace_log"; _run_test_release_case
+
 .PHONY: test_async_std_release
 test_async_std_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F async_std"; _run_test_release_case
+
+.PHONY: test_async_std_release
+test_log_async_std_release:
+	@${RUNRELEASECASE}; FEATURE_FLAG="-F async_std,trace_log"; _run_test_release_case
+
 
 .PHONY: build
 build: init

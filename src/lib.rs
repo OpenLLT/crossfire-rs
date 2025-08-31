@@ -232,5 +232,15 @@ pub mod stream;
 mod crossbeam;
 pub use crossbeam::err::*;
 
+#[macro_export(local_inner_macros)]
+macro_rules! trace_log {
+    ($($arg:tt)+)=>{
+        #[cfg(feature="trace_log")]
+        {
+            log::debug!($($arg)+);
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests;

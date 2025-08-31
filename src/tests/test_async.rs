@@ -12,8 +12,7 @@ use std::time::Duration;
 
 #[fixture]
 fn setup_log() {
-    let _ = recipe::env_logger("LOG_FILE", "LOG_LEVEL").build().expect("log setup");
-    //    let _ = recipe::ring_file("/tmp/ring.log", 512*1024*1024, Level::Debug, signal_consts::SIGHUP).build().expect("log_setup");
+    _setup_log();
 }
 
 #[logfn]
