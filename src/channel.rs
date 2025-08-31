@@ -1,5 +1,6 @@
 pub use super::waker_registry::*;
 pub use crate::locked_waker::*;
+use crate::trace_log;
 pub use crossbeam::channel::{RecvError, RecvTimeoutError, TryRecvError};
 pub use crossbeam::channel::{SendError, SendTimeoutError, TrySendError};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -58,7 +59,8 @@ impl ChannelShared {
     pub(crate) fn close_tx(&self) {
         if self.tx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
             self.closed.store(true, Ordering::SeqCst);
-            self.recvs.close();
+            self.recvs.close("tx");
+            trace_log!("close_tx");
         }
     }
 
@@ -67,7 +69,8 @@ impl ChannelShared {
     pub(crate) fn close_rx(&self) {
         if self.rx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
             self.closed.store(true, Ordering::SeqCst);
-            self.senders.close();
+            self.senders.close("rx");
+            trace_log!("close_rx");
         }
     }
 
@@ -82,22 +85,28 @@ impl ChannelShared {
                 // which is not woken, can be reuse.
                 // https://github.com/frostyplanet/crossfire-rs/issues/14
                 if waker.will_wake(ctx) {
+                    trace_log!("rx: will_wake {:?}", waker);
                     return false;
                 } else {
-                    self.recvs.cancel_waker(waker);
+                    trace_log!("rx: cancel_waker {:?}", waker);
+                    self.recvs.cancel_waker(waker, "rx");
                     LockedWaker::new(ctx)
                 }
             } else if state != WakerState::WAKED as u8 {
                 // not possible
-                LockedWaker::new(ctx)
+                let w = LockedWaker::new(ctx);
+                trace_log!("rx: state={} renew {:?}", state, w);
+                w
             } else {
                 waker.reset_init();
+                trace_log!("rx: {:?} reset_init", waker);
                 o_waker.take().unwrap()
             }
         } else {
+            trace_log!("rx: new waker");
             LockedWaker::new(ctx)
         };
-        self.recvs.reg_waker(&_waker);
+        self.recvs.reg_waker(&_waker, "rx");
         o_waker.replace(_waker);
         true
     }
@@ -113,19 +122,23 @@ impl ChannelShared {
                 // which is not woken, can be reuse.
                 // https://github.com/frostyplanet/crossfire-rs/issues/14
                 if waker.will_wake(ctx) {
+                    trace_log!("tx: will_wake {:?}", waker);
                     return false;
                 } else {
-                    self.senders.cancel_waker(waker);
+                    trace_log!("tx: cancel_waker {:?}", waker);
+                    self.senders.cancel_waker(waker, "tx");
                     LockedWaker::new(ctx)
                 }
             } else {
                 waker.reset_init();
+                trace_log!("tx: {:?} reset_init", waker);
                 o_waker.take().unwrap()
             }
         } else {
+            trace_log!("tx: new waker");
             LockedWaker::new(ctx)
         };
-        self.senders.reg_waker(&_waker);
+        self.senders.reg_waker(&_waker, "tx");
         o_waker.replace(_waker);
         true
     }
@@ -133,25 +146,25 @@ impl ChannelShared {
     /// Wake up one rx
     #[inline(always)]
     pub(crate) fn on_send(&self) {
-        self.recvs.fire()
+        self.recvs.fire("rx")
     }
 
     /// Wake up one tx
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
-        self.senders.fire()
+        self.senders.fire("tx")
     }
 
     /// On timeout, clear dead wakers on sender queue
     #[inline(always)]
     pub(crate) fn clear_send_wakers(&self, seq: u64) {
-        self.senders.clear_wakers(seq);
+        self.senders.clear_wakers(seq, "tx");
     }
 
     /// On timeout, clear dead wakers on receiver queue
     #[inline(always)]
     pub(crate) fn clear_recv_wakers(&self, seq: u64) {
-        self.recvs.clear_wakers(seq);
+        self.recvs.clear_wakers(seq, "rx");
     }
 
     /// Just for debugging purpose, to monitor queue size

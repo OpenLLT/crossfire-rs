@@ -1,9 +1,38 @@
+use captains_log::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(not(miri))]
 pub const ROUND: usize = 10000;
 #[cfg(miri)]
 pub const ROUND: usize = 20;
+
+pub fn _setup_log() {
+    #[cfg(feature = "deadlock_debug")]
+    {
+        #[cfg(miri)]
+        {
+            let _ = std::fs::remove_file("/tmp/crossfire_miri.log");
+            let format = LogFormat::new(recipe::DEFAULT_TIME, recipe::prod_format_f);
+            let file = LogRawFile::new("/tmp", "crossfire_miri.log", Level::Info, format);
+            captains_log::Builder::default().add_sink(file).test().build().expect("log setup");
+        }
+        #[cfg(not(miri))]
+        {
+            let _ = recipe::ring_file(
+                "/tmp/ring.log",
+                512 * 1024 * 1024,
+                Level::Info,
+                Some(signal_consts::SIGHUP),
+            )
+            .build()
+            .expect("log_setup");
+        }
+    }
+    #[cfg(not(feature = "deadlock_debug"))]
+    {
+        let _ = recipe::env_logger("LOG_FILE", "LOG_LEVEL").build().expect("log setup");
+    }
+}
 
 #[allow(dead_code)]
 macro_rules! runtime_block_on {

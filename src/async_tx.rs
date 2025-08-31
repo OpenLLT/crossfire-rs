@@ -1,4 +1,5 @@
 use crate::sink::AsyncSink;
+use crate::trace_log;
 use crate::{channel::*, MTx, Tx};
 use crossbeam::channel::Sender;
 use crossbeam::utils::Backoff;
@@ -214,6 +215,10 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 if let Err(TrySendError::Full(t)) = r {
                     item = t;
                 } else {
+                    #[cfg(feature = "deadlock_debug")]
+                    {
+                        trace_log!("tx: {:?} send", o_waker);
+                    }
                     let _ = o_waker.take();
                     return r;
                 }
@@ -227,7 +232,9 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                         break; // Check close and return Pending
                     }
                     if let Some(waker) = o_waker.as_ref() {
-                        if waker.commit() {
+                        let r = waker.commit();
+                        trace_log!("tx: {:?} commit {}", waker, r);
+                        if r {
                             break;
                         }
                     } else {
@@ -235,7 +242,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     }
                 }
                 if let Some(waker) = o_waker.take() {
-                    self.shared.senders.cancel_waker(&waker);
+                    self.shared.senders.cancel_waker(&waker, "tx");
                 }
                 continue;
             }

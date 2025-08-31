@@ -12,12 +12,7 @@ pub struct LockedWaker(Arc<LockedWakerInner>);
 impl fmt::Debug for LockedWaker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let _self = self.0.as_ref();
-        write!(
-            f,
-            "LockedWaker(seq={}, state={})",
-            _self.seq.load(Ordering::Acquire),
-            _self.state.load(Ordering::Acquire)
-        )
+        write!(f, "LockedWaker(seq={})", _self.seq.load(Ordering::Acquire),)
     }
 }
 
@@ -55,12 +50,12 @@ impl LockedWaker {
 
     #[inline(always)]
     pub(crate) fn get_seq(&self) -> u64 {
-        self.0.seq.load(Ordering::Relaxed)
+        self.0.seq.load(Ordering::Acquire)
     }
 
     #[inline(always)]
     pub(crate) fn set_seq(&self, seq: u64) {
-        self.0.seq.store(seq, Ordering::Relaxed);
+        self.0.seq.store(seq, Ordering::Release);
     }
 
     #[inline(always)]
@@ -112,7 +107,7 @@ impl LockedWaker {
 
     /// return true on suc wake up, false when already woken up.
     #[inline(always)]
-    pub(crate) fn wake(&self) -> bool {
+    pub(crate) fn wake(&self) -> u8 {
         let _self = self.0.as_ref();
         let old_state = _self.state.swap(WakerState::WAKED as u8, Ordering::SeqCst);
         // No matter the flag, call wake anyway
@@ -120,7 +115,7 @@ impl LockedWaker {
             _self.waker.wake_by_ref();
         }
         // NOTE: INIT is in between state
-        return old_state == WakerState::WAITING as u8;
+        old_state
     }
 }
 
@@ -135,11 +130,11 @@ impl LockedWakerRef {
     }
 
     #[inline(always)]
-    pub(crate) fn wake(&self) -> bool {
+    pub(crate) fn wake(&self) -> u8 {
         if let Some(_self) = self.0.upgrade() {
             return LockedWaker(_self).wake();
         } else {
-            return false;
+            return WakerState::INIT as u8;
         }
     }
 

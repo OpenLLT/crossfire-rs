@@ -1,4 +1,5 @@
 use crate::stream::AsyncStream;
+use crate::trace_log;
 use crate::{channel::*, MRx, Rx};
 use crossbeam::channel::Receiver;
 use crossbeam::utils::Backoff;
@@ -200,6 +201,10 @@ impl<T> AsyncRx<T> {
                 let r = self.try_recv();
                 if let Err(TryRecvError::Empty) = &r {
                 } else {
+                    #[cfg(feature = "deadlock_debug")]
+                    {
+                        trace_log!("rx: {:?} recv", o_waker);
+                    }
                     let _ = o_waker.take();
                     return r;
                 }
@@ -213,7 +218,9 @@ impl<T> AsyncRx<T> {
                         break; // Check close and return Pending
                     }
                     if let Some(waker) = o_waker.as_ref() {
-                        if waker.commit() {
+                        let r = waker.commit();
+                        trace_log!("rx: {:?} commit {}", waker, r);
+                        if r {
                             break;
                         }
                     } else {
@@ -221,7 +228,7 @@ impl<T> AsyncRx<T> {
                     }
                 }
                 if let Some(waker) = o_waker.take() {
-                    self.shared.recvs.cancel_waker(&waker);
+                    self.shared.recvs.cancel_waker(&waker, "rx");
                 }
                 continue;
             }

@@ -213,5 +213,15 @@ pub use async_rx::*;
 pub mod sink;
 pub mod stream;
 
+#[macro_export(local_inner_macros)]
+macro_rules! trace_log {
+    ($($arg:tt)+)=>{
+        #[cfg(feature="deadlock_debug")]
+        {
+            log::info!($($arg)+);
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests;
