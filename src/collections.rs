@@ -43,11 +43,15 @@ impl<T> WeakCell<T> {
         }
     }
 
-    pub fn clear(&self) {
+    #[inline(always)]
+    pub fn clear(&self) -> bool {
         let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
         if ptr != ptr::null_mut() {
             // Convert into Weak and drop
             let _ = unsafe { Weak::from_raw(ptr) };
+            true
+        } else {
+            false
         }
     }
 

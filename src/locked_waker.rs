@@ -75,10 +75,12 @@ impl LockedWaker {
             WakerState::INIT as u8,
             WakerState::WAITING as u8,
             Ordering::SeqCst,
-            Ordering::Relaxed,
+            Ordering::Acquire,
         ) {
             Ok(_) => return true,
-            Err(_state) => return false,
+            Err(_state) => {
+                return false;
+            }
         }
     }
 
@@ -189,8 +191,8 @@ impl WakerCell {
     }
 
     #[inline(always)]
-    pub fn clear(&self) {
-        self.0.clear();
+    pub fn clear(&self) -> bool {
+        self.0.clear()
     }
 
     #[inline(always)]
