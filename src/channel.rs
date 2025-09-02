@@ -85,8 +85,9 @@ impl ChannelShared {
                 // which is not woken, can be reuse.
                 // https://github.com/frostyplanet/crossfire-rs/issues/14
                 if waker.will_wake(ctx) {
-                    trace_log!("rx: will_wake {:?}", waker);
-                    return false;
+                    let r = waker.get_state() >= WakerState::WAITING as u8;
+                    trace_log!("rx: will_wake {:?}, return {} ", waker, r);
+                    return r;
                 } else {
                     trace_log!("rx: cancel_waker {:?}", waker);
                     self.recvs.cancel_waker(waker, "rx");
@@ -122,8 +123,9 @@ impl ChannelShared {
                 // which is not woken, can be reuse.
                 // https://github.com/frostyplanet/crossfire-rs/issues/14
                 if waker.will_wake(ctx) {
-                    trace_log!("tx: will_wake {:?}", waker);
-                    return false;
+                    let r = waker.get_state() >= WakerState::WAITING as u8;
+                    trace_log!("tx: will_wake {:?}, return {} ", waker, r);
+                    return r;
                 } else {
                     trace_log!("tx: cancel_waker {:?}", waker);
                     self.senders.cancel_waker(waker, "tx");

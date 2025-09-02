@@ -74,7 +74,7 @@ impl LockedWaker {
         ) {
             Ok(_) => return true,
             Err(_state) => {
-                return false;
+                return _state == WakerState::WAITING as u8;
             }
         }
     }

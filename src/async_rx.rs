@@ -231,8 +231,9 @@ impl<T> AsyncRx<T> {
                     self.shared.recvs.cancel_waker(&waker, "rx");
                 }
                 continue;
+            } else {
+                break;
             }
-            break;
         }
         // Check channel close before sleep, otherwise might block forever
         // Confirmed by test_pressure_1_tx_blocking_1_rx_async()

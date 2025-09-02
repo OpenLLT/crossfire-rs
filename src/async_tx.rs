@@ -245,8 +245,9 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     self.shared.senders.cancel_waker(&waker, "tx");
                 }
                 continue;
+            } else {
+                break;
             }
-            break;
         }
         if self.shared.is_disconnected() {
             let _ = o_waker.take();
