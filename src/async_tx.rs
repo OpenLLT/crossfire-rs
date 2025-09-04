@@ -302,9 +302,7 @@ impl<T: Unpin> Drop for SendFuture<'_, T> {
             // Cancelling the future, poll is not ready
             if self.tx.shared.abandon_send_waker(waker) {
                 if needs_drop::<T>() {
-                    if size_of::<T>() > size_of::<*mut T>() {
-                        unsafe { self.item.assume_init_drop() };
-                    }
+                    unsafe { self.item.assume_init_drop() };
                 }
             }
         }
@@ -346,9 +344,7 @@ impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
             // Cancelling the future, poll is not ready
             if self.tx.shared.abandon_send_waker(waker) {
                 if needs_drop::<T>() {
-                    if size_of::<T>() > size_of::<*mut T>() {
-                        unsafe { self.item.assume_init_drop() };
-                    }
+                    unsafe { self.item.assume_init_drop() };
                 }
             }
         }
