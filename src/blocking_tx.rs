@@ -45,7 +45,7 @@ pub struct Tx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    waker_cache: WakerCache<*mut T>,
+    waker_cache: WakerCache<*const T>,
 }
 
 unsafe impl<T: Send> Send for Tx<T> {}
@@ -78,7 +78,7 @@ impl<T> From<AsyncTx<T>> for Tx<T> {
 impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
     pub(crate) fn _send_bounded(
-        &self, mut item: MaybeUninit<T>, deadline: Option<Instant>,
+        &self, item: &MaybeUninit<T>, deadline: Option<Instant>,
     ) -> Result<(), SendTimeoutError<T>> {
         let shared = &self.shared;
         let large = shared.large;
@@ -116,8 +116,7 @@ impl<T: Send + 'static> Tx<T> {
                 return Ok(());
             }
         }
-        let direct_copy_ptr: *mut T =
-            if direct_copy { item.as_mut_ptr() } else { std::ptr::null_mut() };
+        let direct_copy_ptr: *const T = if direct_copy { item.as_ptr() } else { std::ptr::null() };
 
         let mut state: u8;
         let mut o_waker: Option<SendWaker<T>> = None;
@@ -143,7 +142,7 @@ impl<T: Send + 'static> Tx<T> {
             // For nx1 (more likely congest), need to reset backoff
             // to allow more yield to receivers.
             // For nxn (the backoff is already complete), wait a little bit.
-            (state, o_waker) = shared.sender_reg_and_try(&mut item, waker, false);
+            (state, o_waker) = shared.sender_reg_and_try(&item, waker, false);
             while state < WakerState::Waked as u8 {
                 if direct_copy_ptr != std::ptr::null_mut() {
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
@@ -205,12 +204,12 @@ impl<T: Send + 'static> Tx<T> {
         }
         match &shared.inner {
             Channel::Array(inner) => {
-                let mut _item = MaybeUninit::new(item);
+                let _item = MaybeUninit::new(item);
                 if unsafe { inner.push_with_ptr(_item.as_ptr()) } {
                     shared.on_send();
                     return Ok(());
                 }
-                match self._send_bounded(_item, None) {
+                match self._send_bounded(&_item, None) {
                     Ok(_) => return Ok(()),
                     Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
                     Err(SendTimeoutError::Timeout(_)) => unreachable!(),
@@ -269,12 +268,12 @@ impl<T: Send + 'static> Tx<T> {
                     TrySendError::Full(t) => SendTimeoutError::Timeout(t),
                 }),
                 Some(deadline) => {
-                    let mut _item = MaybeUninit::new(item);
+                    let _item = MaybeUninit::new(item);
                     if unsafe { inner.push_with_ptr(_item.as_ptr()) } {
                         shared.on_send();
                         return Ok(());
                     }
-                    match self._send_bounded(_item, Some(deadline)) {
+                    match self._send_bounded(&_item, Some(deadline)) {
                         Ok(_) => return Ok(()),
                         Err(e) => return Err(e),
                     }

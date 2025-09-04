@@ -7,20 +7,20 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 pub enum RegistrySender<T> {
-    Single(RegistrySingle<*mut T>),
-    Multi(RegistryMulti<*mut T>),
+    Single(RegistrySingle<*const T>),
+    Multi(RegistryMulti<*const T>),
     Dummy,
 }
 
 impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn new_single() -> Self {
-        Self::Single(RegistrySingle::<*mut T>::new())
+        Self::Single(RegistrySingle::<*const T>::new())
     }
 
     #[inline(always)]
     pub fn new_multi() -> Self {
-        Self::Multi(RegistryMulti::<*mut T>::new())
+        Self::Multi(RegistryMulti::<*const T>::new())
     }
 
     #[inline(always)]

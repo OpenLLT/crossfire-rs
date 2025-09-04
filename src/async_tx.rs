@@ -196,8 +196,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns `Poll::Ready(Err(())` when all Rx dropped.
     #[inline(always)]
     pub(crate) fn poll_send<'a>(
-        &self, ctx: &'a mut Context, item: &mut MaybeUninit<T>,
-        o_waker: &'a mut Option<SendWaker<T>>, sink: bool,
+        &self, ctx: &'a mut Context, item: &MaybeUninit<T>, o_waker: &'a mut Option<SendWaker<T>>,
+        sink: bool,
     ) -> Poll<Result<(), ()>> {
         let shared = &self.shared;
         if shared.is_disconnected() {
@@ -314,7 +314,7 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match _self.tx.poll_send(ctx, &mut _self.item, &mut _self.waker, false) {
+        match _self.tx.poll_send(ctx, &_self.item, &mut _self.waker, false) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
                 return Poll::Ready(Ok(()));
@@ -356,7 +356,7 @@ impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match _self.tx.poll_send(ctx, &mut _self.item, &mut _self.waker, false) {
+        match _self.tx.poll_send(ctx, &_self.item, &mut _self.waker, false) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
                 return Poll::Ready(Ok(()));

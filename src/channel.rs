@@ -240,7 +240,7 @@ impl<T> ChannelShared<T> {
     /// when need_wake == false, will always return Some(state).
     #[inline]
     pub(crate) fn sender_reg_and_try(
-        &self, item: &mut MaybeUninit<T>, waker: SendWaker<T>, sink: bool,
+        &self, item: &MaybeUninit<T>, waker: SendWaker<T>, sink: bool,
     ) -> (u8, Option<SendWaker<T>>) {
         self.senders.reg_waker(&waker);
         // Not allow Spurious wake and enter this function again;
@@ -317,7 +317,7 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*mut T>) -> WakeResult {
+    pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*const T>) -> WakeResult {
         waker.wake_or_copy(|p: *const T| -> u8 {
             if let Channel::Array(inner) = &self.inner {
                 if unsafe { inner.push_with_ptr(p) } {

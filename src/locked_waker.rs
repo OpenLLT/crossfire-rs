@@ -93,7 +93,7 @@ impl<P> ChannelWaker<P> {
 
 pub type RecvWaker = ChannelWaker<()>;
 
-pub type SendWaker<T> = ChannelWaker<*mut T>;
+pub type SendWaker<T> = ChannelWaker<*const T>;
 
 enum WakerType {
     Async(Waker),
@@ -318,9 +318,9 @@ impl<P> WakerInner<P> {
     }
 }
 
-impl<T> WakerInner<*mut T> {
+impl<T> WakerInner<*const T> {
     #[inline(always)]
-    fn get_payload(&self) -> *mut T {
+    fn get_payload(&self) -> *const T {
         *self.get_payload_mut()
     }
 

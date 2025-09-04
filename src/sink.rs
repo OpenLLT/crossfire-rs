@@ -81,13 +81,13 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     /// Returns Err([crate::TrySendError::Disconnected]) when all Rx dropped.
     #[inline]
     pub fn poll_send(&mut self, ctx: &mut Context, item: T) -> Result<(), TrySendError<T>> {
-        let mut _item = MaybeUninit::new(item);
+        let _item = MaybeUninit::new(item);
         let shared = &self.tx.shared;
         if shared.send(&_item) {
             shared.on_send();
             return Ok(());
         }
-        match self.tx.poll_send(ctx, &mut _item, &mut self.waker, true) {
+        match self.tx.poll_send(ctx, &_item, &mut self.waker, true) {
             Poll::Ready(Ok(())) => Ok(()),
             Poll::Ready(Err(())) => Err(TrySendError::Disconnected(unsafe { _item.assume_init() })),
             Poll::Pending => Err(TrySendError::Full(unsafe { _item.assume_init() })),
