@@ -220,12 +220,13 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
-    pub fn close_wake(&self) {
+    pub fn close_wake(&self) -> bool {
         // should have lock because it will content with abandon()
         if self.change_state_smaller_eq(WakerState::Waiting, WakerState::Closed).is_ok() {
             self._wake_nolock();
+            return true;
         }
-        return;
+        return false;
     }
 
     // Return Ok(pre_state), otherwise return Err(current_state)
