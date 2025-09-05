@@ -2,6 +2,7 @@ use crate::backoff::*;
 use crate::crossbeam::array_queue::ArrayQueue;
 pub use crate::crossbeam::err::*;
 pub use crate::locked_waker::*;
+use crate::trace_log;
 pub use crate::waker_registry::*;
 use crossbeam_queue::SegQueue;
 use std::mem::MaybeUninit;
@@ -183,9 +184,13 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn close_tx(&self) {
         let _ = self.congest.fetch_sub(1, Ordering::Relaxed);
-        if self.tx_count.fetch_sub(1, Ordering::Release) <= 1 {
+        let old = self.tx_count.fetch_sub(1, Ordering::Release);
+        if old <= 1 {
+            trace_log!("closing from tx");
             self.closed.store(true, Ordering::SeqCst); // serve as fence
             self._close_all();
+        } else {
+            trace_log!("drop tx {}", old - 1);
         }
     }
 
@@ -193,9 +198,13 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn close_rx(&self) {
         let _ = self.congest.fetch_add(1, Ordering::Relaxed);
-        if self.rx_count.fetch_sub(1, Ordering::Release) <= 1 {
+        let old = self.rx_count.fetch_sub(1, Ordering::Release);
+        if old <= 1 {
+            trace_log!("closing from rx");
             self.closed.store(true, Ordering::SeqCst); // serve as fence
             self._close_all();
+        } else {
+            trace_log!("drop rx {}", old - 1);
         }
     }
 
@@ -344,10 +353,12 @@ impl<T> ChannelShared<T> {
     pub(crate) fn abandon_send_waker(&self, waker: SendWaker<T>) -> bool {
         match waker.abandon() {
             Ok(()) => {
+                trace_log!("tx: abandon cancel {:?}", waker);
                 self.senders.clear_wakers(&waker);
                 return true;
             }
             Err(state) => {
+                trace_log!("tx: abandon err  {:?} {}", waker, state);
                 if state == WakerState::Done as u8 {
                     return false;
                 } else if state == WakerState::Init as u8 {
@@ -369,13 +380,13 @@ impl<T> ChannelShared<T> {
     pub(crate) fn abandon_recv_waker(&self, waker: RecvWaker) -> bool {
         match waker.abandon() {
             Ok(()) => {
+                trace_log!("rx: abandon cancel {:?}", waker);
                 self.recvs.clear_wakers(&waker);
                 return true;
             }
             Err(state) => {
-                if state == WakerState::Done as u8 {
-                    return false;
-                } else if state == WakerState::Init as u8 {
+                trace_log!("rx: abandon err {:?} {}", waker, state);
+                if state == WakerState::Init as u8 {
                     // For AsyncStream::poll_item, clear only one
                     self.recvs.cancel_waker(&waker);
                     return true;
