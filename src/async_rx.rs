@@ -1,6 +1,8 @@
 use crate::backoff::*;
 use crate::stream::AsyncStream;
-use crate::{channel::*, MRx, Rx};
+#[cfg(feature = "trace_log")]
+use crate::tokio_task_id;
+use crate::{channel::*, trace_log, MRx, Rx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -190,6 +192,7 @@ impl<T> AsyncRx<T> {
             () => {
                 if let Some(item) = shared.try_recv() {
                     shared.on_recv();
+                    trace_log!("rx{:?}: recv", tokio_task_id!());
                     return Ok(item);
                 }
             };
@@ -197,6 +200,7 @@ impl<T> AsyncRx<T> {
                 if let Some(item) = shared.try_recv() {
                     shared.on_recv();
                     if let Some(waker) = o_waker.take() {
+                        trace_log!("rx{:?}: recv {:?}", tokio_task_id!(), waker);
                         if $state < WakerState::Waked as u8 {
                             shared.recvs.cancel_waker(&waker);
                         }
@@ -213,17 +217,19 @@ impl<T> AsyncRx<T> {
                         // Spurious waked by runtime, or
                         // Normally only selection or multiplex future will get here.
                         // No need to reg again, since waker is not consumed.
+                        trace_log!("rx{:?}: will_wake {:?}", tokio_task_id!(), waker);
                         try_recv!(state);
                         break;
                     } else {
                         // Spurious waked by runtime, waker can not be re-used (issue 38)
                         shared.recvs.cancel_waker(&waker);
+                        trace_log!("rx{:?}: cancel {:?}", tokio_task_id!(), waker);
                         let _ = o_waker.take(); // waker cannot be used again
                     }
                 }
                 try_recv!(state);
                 if state == WakerState::Closed as u8 {
-                    return Err(TryRecvError::Disconnected);
+                    break;
                 }
             } else {
                 // First call
@@ -258,7 +264,8 @@ impl<T> AsyncRx<T> {
             }
             if !stream {
                 let state = _waker.commit_waiting();
-                if state != WakerState::Waiting as u8 {
+                trace_log!("rx{:?}: commit_waiting {:?} {}", tokio_task_id!(), _waker, state);
+                if state == WakerState::Waked as u8 {
                     continue;
                 }
             }
@@ -266,6 +273,7 @@ impl<T> AsyncRx<T> {
         }
         if shared.is_disconnected() {
             try_recv!(WakerState::Closed as u8);
+            trace_log!("rx{:?}: disconnected {:?}", tokio_task_id!(), o_waker);
             return Err(TryRecvError::Disconnected);
         } else {
             return Err(TryRecvError::Empty);
