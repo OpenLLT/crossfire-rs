@@ -245,19 +245,18 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     shared.on_send();
                     return Poll::Ready(Ok(()));
                 }
-            }
-            let cfg = self.get_backoff_cfg();
-            if cfg.limit > 0 {
-                let mut _backoff = Backoff::new(cfg);
-                loop {
-                    _backoff.spin();
-                    if shared.send(item) {
-                        shared.on_send();
-                        let _ = o_waker.take();
-                        return Poll::Ready(Ok(()));
-                    }
-                    if _backoff.is_completed() {
-                        break;
+                let cfg = self.get_backoff_cfg();
+                if cfg.limit > 0 {
+                    let mut _backoff = Backoff::new(cfg);
+                    loop {
+                        _backoff.spin();
+                        if shared.send(item) {
+                            shared.on_send();
+                            return Poll::Ready(Ok(()));
+                        }
+                        if _backoff.is_completed() {
+                            break;
+                        }
                     }
                 }
             }
