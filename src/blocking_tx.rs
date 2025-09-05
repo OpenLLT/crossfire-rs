@@ -1,5 +1,5 @@
 use crate::backoff::*;
-use crate::{channel::*, AsyncTx, MAsyncTx};
+use crate::{channel::*, trace_log, AsyncTx, MAsyncTx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -101,6 +101,7 @@ impl<T: Send + 'static> Tx<T> {
                     }
                     _ => {
                         shared.on_send();
+                        trace_log!("tx: send");
                         std::thread::yield_now();
                         return Ok(());
                     }
@@ -113,6 +114,7 @@ impl<T: Send + 'static> Tx<T> {
                     continue;
                 }
                 shared.on_send();
+                trace_log!("tx: send");
                 return Ok(());
             }
         }
@@ -122,6 +124,7 @@ impl<T: Send + 'static> Tx<T> {
         let mut o_waker: Option<SendWaker<T>> = None;
         macro_rules! return_ok {
             () => {
+                trace_log!("tx: send {:?}", o_waker);
                 if let Some(waker) = o_waker.take() {
                     self.waker_cache.push(waker);
                 }
@@ -143,6 +146,7 @@ impl<T: Send + 'static> Tx<T> {
             // to allow more yield to receivers.
             // For nxn (the backoff is already complete), wait a little bit.
             (state, o_waker) = shared.sender_reg_and_try(&item, waker, false);
+            trace_log!("tx: sender_reg_and_try {:?} state={}", o_waker, state);
             while state < WakerState::Waked as u8 {
                 if direct_copy_ptr != std::ptr::null_mut() {
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
