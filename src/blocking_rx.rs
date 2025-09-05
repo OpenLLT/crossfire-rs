@@ -1,5 +1,5 @@
 use crate::backoff::*;
-use crate::{channel::*, AsyncRx, MAsyncRx};
+use crate::{channel::*, trace_log, AsyncRx, MAsyncRx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -90,12 +90,14 @@ impl<T> Rx<T> {
                 () => {
                     if let Some(item) = shared.try_recv() {
                         shared.on_recv();
+                        trace_log!("rx: recv");
                         return Ok(item);
                     }
                 };
                 ($waker: expr) => {
                     if let Some(item) = shared.try_recv() {
                         shared.on_recv();
+                        trace_log!("rx: recv {:?}", $waker);
                         self.waker_cache.push($waker);
                         return Ok(item);
                     }
@@ -122,11 +124,13 @@ impl<T> Rx<T> {
                 } else {
                     if let Some(item) = shared.try_recv() {
                         shared.on_recv();
+                        trace_log!("rx: recv cancel {:?} Init", waker);
                         self.recvs.cancel_waker(&waker);
                         return Ok(item);
                     }
                     state = waker.commit_waiting();
                 }
+                trace_log!("rx: {:?} commit_waiting state={}", waker, state);
                 if shared.is_disconnected() {
                     break 'MAIN;
                 }
