@@ -1,6 +1,8 @@
 use crate::backoff::*;
 use crate::sink::AsyncSink;
-use crate::{channel::*, MTx, Tx};
+#[cfg(feature = "trace_log")]
+use crate::tokio_task_id;
+use crate::{channel::*, trace_log, MTx, Tx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -201,6 +203,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     ) -> Poll<Result<(), ()>> {
         let shared = &self.shared;
         if shared.is_disconnected() {
+            trace_log!("tx{:?}: closed {:?}", tokio_task_id!(), o_waker);
             return Poll::Ready(Err(()));
         }
         let mut _waker;
@@ -215,16 +218,19 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     return Poll::Ready(Err(()));
                 } else if state < WakerState::Waked as u8 {
                     if waker.will_wake(ctx) {
+                        trace_log!("tx{:?}: will_wake {:?}", tokio_task_id!(), waker);
                         // Normally only selection or multiplex future will get here.
                         // No need to reg again, since waker is not consumed.
                         return Poll::Pending;
                     } else {
                         // Spurious waked by runtime, waker can not be re-used (issue 38)
                         self.senders.cancel_waker(waker);
+                        trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
                         let _ = o_waker.take();
                     }
                 }
                 if shared.send(item) {
+                    trace_log!("tx{:?}: send {:?} {}", tokio_task_id!(), o_waker, state);
                     shared.on_send();
                     let _ = o_waker.take();
                     return Poll::Ready(Ok(()));
@@ -232,6 +238,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             } else {
                 if shared.send(item) {
                     shared.on_send();
+                    trace_log!("tx{:?}: send", tokio_task_id!());
                     return Poll::Ready(Ok(()));
                 }
                 let cfg = self.get_backoff_cfg();
@@ -241,6 +248,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                         _backoff.spin();
                         if shared.send(item) {
                             shared.on_send();
+                            trace_log!("tx{:?}: send", tokio_task_id!());
                             return Poll::Ready(Ok(()));
                         }
                         if _backoff.is_completed() {
@@ -258,14 +266,18 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             };
             (state, _waker) = shared.sender_reg_and_try(item, waker, sink);
             *o_waker = _waker;
+            trace_log!("tx{:?}: sender_reg_and_try {:?} {}", tokio_task_id!(), o_waker, state);
             if state < WakerState::Waked as u8 {
                 return Poll::Pending;
             } else if state > WakerState::Waked as u8 {
-                let _ = o_waker.take();
                 if state == WakerState::Done as u8 {
+                    trace_log!("tx{:?}: send {:?} done", o_waker, tokio_task_id!());
+                    let _ = o_waker.take();
                     return Poll::Ready(Ok(()));
                 } else {
                     debug_assert_eq!(state, WakerState::Closed as u8);
+                    trace_log!("tx{:?}: closed {:?}", o_waker, tokio_task_id!());
+                    let _ = o_waker.take();
                     return Poll::Ready(Err(()));
                 }
             }
