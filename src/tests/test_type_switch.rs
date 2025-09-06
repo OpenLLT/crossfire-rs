@@ -36,10 +36,10 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>
         // Spawn async sender task - will block when buffer fills
         let sender_task = async_spawn!(async move {
             for i in 0..total_messages {
-                debug!("Async sender sending message {}", i);
+                trace!("Async sender sending message {}", i);
                 tx.send(i).await.expect("Failed to send message");
             }
-            debug!("Async sender completed all {} messages", total_messages);
+            trace!("Async sender completed all {} messages", total_messages);
         });
 
         // Consume some messages with async receiver (in async task)
@@ -48,7 +48,7 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>
             for _ in 0..async_consumed {
                 match rx.recv().await {
                     Ok(value) => {
-                        debug!("Async receiver got message: {}", value);
+                        trace!("Async receiver got message: {}", value);
                         async_received.push(value);
                     }
                     Err(e) => {
@@ -56,7 +56,7 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>
                     }
                 }
             }
-            debug!("Async receiver consumed {} messages", async_received.len());
+            trace!("Async receiver consumed {} messages", async_received.len());
             (rx, async_received)
         });
 
@@ -72,11 +72,11 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>
             let mut sync_received = Vec::new();
 
             while let Ok(value) = blocking_rx.recv() {
-                debug!("Sync receiver got message: {}", value);
+                trace!("Sync receiver got message: {}", value);
                 sync_received.push(value);
             }
 
-            debug!("Sync receiver consumed {} messages from buffer", sync_received.len());
+            trace!("Sync receiver consumed {} messages from buffer", sync_received.len());
             sync_received
         });
 
@@ -97,7 +97,7 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!(
+        trace!(
             "Successfully switched bounded channel from async to sync receiver with backpressure"
         );
     });
@@ -119,9 +119,9 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
         let sender_task = async_spawn!(async move {
             for i in 0..total_messages {
                 tx.send(i).await.expect("Failed to send message");
-                debug!("Async sender sent message: {}", i);
+                trace!("Async sender sent message: {}", i);
             }
-            debug!("Async sender completed all {} messages", total_messages);
+            trace!("Async sender completed all {} messages", total_messages);
         });
 
         // Consume some messages with async receiver (in async task)
@@ -130,7 +130,7 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
             for _ in 0..async_consumed {
                 match rx.recv().await {
                     Ok(value) => {
-                        debug!("Async receiver got message: {}", value);
+                        trace!("Async receiver got message: {}", value);
                         async_received.push(value);
                     }
                     Err(e) => {
@@ -138,7 +138,7 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
                     }
                 }
             }
-            debug!("Async receiver consumed {} messages", async_received.len());
+            trace!("Async receiver consumed {} messages", async_received.len());
             (rx, async_received)
         });
 
@@ -153,10 +153,10 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
         let sync_th = std::thread::spawn(move || {
             let mut sync_received = Vec::new();
             while let Ok(value) = sync_rx.recv() {
-                debug!("Sync receiver got message: {}", value);
+                trace!("Sync receiver got message: {}", value);
                 sync_received.push(value);
             }
-            debug!("Sync receiver consumed {} messages from buffer", sync_received.len());
+            trace!("Sync receiver consumed {} messages from buffer", sync_received.len());
             sync_received
         });
 
@@ -176,7 +176,7 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!(
+        trace!(
             "Successfully switched MPMC bounded channel from async to sync receiver with backpressure"
         );
     });
@@ -198,20 +198,20 @@ fn test_spsc_bounded_blocking_with_async_sender_switch(
         let receiver_handle = std::thread::spawn(move || {
             let mut all_received = Vec::new();
             while let Ok(value) = rx.recv() {
-                debug!("Blocking receiver got message: {}", value);
+                trace!("Blocking receiver got message: {}", value);
                 all_received.push(value);
             }
-            debug!("Blocking receiver completed");
+            trace!("Blocking receiver completed");
             all_received
         });
 
         // Send messages with blocking sender in a thread (will block when buffer fills)
         let sender_handle = std::thread::spawn(move || {
             for i in 0..sync_sent {
-                debug!("Blocking sender sending message {}", i);
+                trace!("Blocking sender sending message {}", i);
                 tx.send(i).expect("Failed to send message");
             }
-            debug!("Blocking sender sent {} messages", sync_sent);
+            trace!("Blocking sender sent {} messages", sync_sent);
             tx
         });
 
@@ -225,10 +225,10 @@ fn test_spsc_bounded_blocking_with_async_sender_switch(
         let remaining_messages = total_messages - sync_sent;
         let async_sender_task = async_spawn!(async move {
             for i in sync_sent..total_messages {
-                debug!("Async sender sending message {}", i);
+                trace!("Async sender sending message {}", i);
                 async_tx.send(i).await.expect("Failed to send message");
             }
-            debug!("Async sender sent {} more messages", remaining_messages);
+            trace!("Async sender sent {} more messages", remaining_messages);
         });
         // Wait for async sender to complete
         let _ = async_sender_task.await;
@@ -241,7 +241,7 @@ fn test_spsc_bounded_blocking_with_async_sender_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched from blocking to async sender with backpressure");
+        trace!("Successfully switched from blocking to async sender with backpressure");
     });
 }
 
@@ -262,7 +262,7 @@ fn test_mpsc_bounded_blocking_with_async_sender_switch(
             for i in 0..sync_sent {
                 tx.send(i).expect("Failed to send message");
             }
-            debug!("Blocking MTx sent {} messages, buffer has messages", sync_sent);
+            trace!("Blocking MTx sent {} messages, buffer has messages", sync_sent);
             tx
         });
 
@@ -278,7 +278,7 @@ fn test_mpsc_bounded_blocking_with_async_sender_switch(
             for i in sync_sent..total_messages {
                 async_tx.send(i).await.expect("Failed to send message");
             }
-            debug!("Async MAsyncTx sent {} more messages", remaining_messages);
+            trace!("Async MAsyncTx sent {} more messages", remaining_messages);
         });
 
         // Receive all messages with blocking receiver in a thread
@@ -302,7 +302,7 @@ fn test_mpsc_bounded_blocking_with_async_sender_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched from blocking MTx to async MAsyncTx with buffered messages");
+        trace!("Successfully switched from blocking MTx to async MAsyncTx with buffered messages");
     });
 }
 
@@ -323,7 +323,7 @@ fn test_mpmc_bounded_blocking_with_async_sender_switch(
             for i in 0..sync_sent {
                 tx.send(i).expect("Failed to send message");
             }
-            debug!("Blocking MTx sent {} messages, buffer has messages", sync_sent);
+            trace!("Blocking MTx sent {} messages, buffer has messages", sync_sent);
             tx
         });
 
@@ -339,7 +339,7 @@ fn test_mpmc_bounded_blocking_with_async_sender_switch(
             for i in sync_sent..total_messages {
                 async_tx.send(i).await.expect("Failed to send message");
             }
-            debug!("Async MAsyncTx sent {} more messages", remaining_messages);
+            trace!("Async MAsyncTx sent {} more messages", remaining_messages);
         });
 
         // Receive all messages with blocking receiver in a thread
@@ -362,7 +362,7 @@ fn test_mpmc_bounded_blocking_with_async_sender_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched from blocking MTx to async MAsyncTx with buffered messages for MPMC");
+        trace!("Successfully switched from blocking MTx to async MAsyncTx with buffered messages for MPMC");
     });
 }
 
@@ -383,7 +383,7 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch(
             for i in 0..total_messages {
                 tx.send(i).expect("Failed to send message");
             }
-            debug!("Sent {} messages to buffer", total_messages);
+            trace!("Sent {} messages to buffer", total_messages);
         });
 
         // Start receiver in a thread to consume some messages
@@ -392,7 +392,7 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch(
             for _ in 0..sync_consumed {
                 sync_received.push(rx.recv().expect("Failed to receive message"));
             }
-            debug!(
+            trace!(
                 "Blocking receiver consumed {} messages, {} remain in buffer",
                 sync_received.len(),
                 total_messages - sync_consumed
@@ -414,7 +414,7 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch(
                 async_received.push(value);
             }
 
-            debug!("Async receiver consumed {} messages from buffer", async_received.len());
+            trace!("Async receiver consumed {} messages from buffer", async_received.len());
             async_received
         });
 
@@ -434,7 +434,7 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched from blocking to async receiver with buffered messages");
+        trace!("Successfully switched from blocking to async receiver with buffered messages");
     });
 }
 
@@ -455,7 +455,7 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch(
             for i in 0..total_messages {
                 tx.send(i).expect("Failed to send message");
             }
-            debug!("Sent {} messages to buffer", total_messages);
+            trace!("Sent {} messages to buffer", total_messages);
         });
 
         // Start receiver in a thread to consume some messages
@@ -464,7 +464,7 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch(
             for _ in 0..sync_consumed {
                 sync_received.push(rx.recv().expect("Failed to receive message"));
             }
-            debug!(
+            trace!(
                 "Blocking receiver consumed {} messages, {} remain in buffer",
                 sync_received.len(),
                 total_messages - sync_consumed
@@ -486,7 +486,7 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch(
                 async_received.push(value);
             }
 
-            debug!("Async receiver consumed {} messages from buffer", async_received.len());
+            trace!("Async receiver consumed {} messages from buffer", async_received.len());
             async_received
         });
 
@@ -506,7 +506,7 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched from blocking to async receiver with buffered messages");
+        trace!("Successfully switched from blocking to async receiver with buffered messages");
     });
 }
 
@@ -527,7 +527,7 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch(
             for i in 0..total_messages {
                 tx.send(i).expect("Failed to send message");
             }
-            debug!("Sent {} messages to buffer", total_messages);
+            trace!("Sent {} messages to buffer", total_messages);
         });
 
         // Start receiver in a thread to consume some messages
@@ -536,7 +536,7 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch(
             for _ in 0..sync_consumed {
                 sync_received.push(rx.recv().expect("Failed to receive message"));
             }
-            debug!(
+            trace!(
                 "Blocking receiver consumed {} messages, {} remain in buffer",
                 sync_received.len(),
                 total_messages - sync_consumed
@@ -556,7 +556,7 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch(
             while let Ok(value) = async_rx.recv().await {
                 async_received.push(value);
             }
-            debug!("Async receiver consumed {} remaining messages", async_received.len());
+            trace!("Async receiver consumed {} remaining messages", async_received.len());
             async_received
         });
 
@@ -572,7 +572,7 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched MPMC from blocking to async receiver with buffered messages");
+        trace!("Successfully switched MPMC from blocking to async receiver with buffered messages");
     });
 }
 
@@ -603,7 +603,7 @@ fn test_multi_producer_sender_switch<R: BlockingRxTrait<usize>>(
             for i in 0..sync_sent {
                 tx.send(i).expect("Failed to send message");
             }
-            debug!("Blocking MTx sent {} messages, buffer has messages", sync_sent);
+            trace!("Blocking MTx sent {} messages, buffer has messages", sync_sent);
             tx
         });
 
@@ -616,7 +616,7 @@ fn test_multi_producer_sender_switch<R: BlockingRxTrait<usize>>(
             for i in sync_sent..total_messages {
                 async_tx.send(i).await.expect("Failed to send message");
             }
-            debug!("Async MAsyncTx sent {} more messages", total_messages - sync_sent);
+            trace!("Async MAsyncTx sent {} more messages", total_messages - sync_sent);
         });
 
         // Wait for async sender to complete, then join receiver
@@ -629,7 +629,7 @@ fn test_multi_producer_sender_switch<R: BlockingRxTrait<usize>>(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched from MTx to MAsyncTx with buffered messages");
+        trace!("Successfully switched from MTx to MAsyncTx with buffered messages");
     });
 }
 
@@ -650,7 +650,7 @@ fn test_spsc_bounded_async_with_blocking_sender_switch(
             for i in 0..async_sent {
                 tx.send(i).await.expect("Failed to send message");
             }
-            debug!("Async sender sent {} messages, buffer has messages", async_sent);
+            trace!("Async sender sent {} messages, buffer has messages", async_sent);
             tx
         });
 
@@ -664,7 +664,7 @@ fn test_spsc_bounded_async_with_blocking_sender_switch(
             for i in async_sent..total_messages {
                 blocking_tx.send(i).expect("Failed to send message");
             }
-            debug!("Blocking sender sent {} more messages", remaining_messages);
+            trace!("Blocking sender sent {} more messages", remaining_messages);
         });
 
         // Receive all messages with async receiver in a task
@@ -686,7 +686,7 @@ fn test_spsc_bounded_async_with_blocking_sender_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched SPSC from async to blocking sender with buffered messages");
+        trace!("Successfully switched SPSC from async to blocking sender with buffered messages");
     });
 }
 
@@ -707,7 +707,7 @@ fn test_mpsc_bounded_async_with_blocking_sender_switch(
             for i in 0..async_sent {
                 tx.send(i).await.expect("Failed to send message");
             }
-            debug!("Async MAsyncTx sent {} messages, buffer has messages", async_sent);
+            trace!("Async MAsyncTx sent {} messages, buffer has messages", async_sent);
             tx
         });
 
@@ -721,7 +721,7 @@ fn test_mpsc_bounded_async_with_blocking_sender_switch(
             for i in async_sent..total_messages {
                 blocking_tx.send(i).expect("Failed to send message");
             }
-            debug!("Blocking MTx sent {} more messages", remaining_messages);
+            trace!("Blocking MTx sent {} more messages", remaining_messages);
         });
 
         // Receive all messages with async receiver in a task
@@ -743,7 +743,7 @@ fn test_mpsc_bounded_async_with_blocking_sender_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched MPSC from async to blocking sender with buffered messages");
+        trace!("Successfully switched MPSC from async to blocking sender with buffered messages");
     });
 }
 
@@ -764,7 +764,7 @@ fn test_mpmc_bounded_async_with_blocking_sender_switch(
             for i in 0..async_sent {
                 tx.send(i).await.expect("Failed to send message");
             }
-            debug!("Async MAsyncTx sent {} messages, buffer has messages", async_sent);
+            trace!("Async MAsyncTx sent {} messages, buffer has messages", async_sent);
             tx
         });
 
@@ -778,7 +778,7 @@ fn test_mpmc_bounded_async_with_blocking_sender_switch(
             for i in async_sent..total_messages {
                 blocking_tx.send(i).expect("Failed to send message");
             }
-            debug!("Blocking MTx sent {} more messages", remaining_messages);
+            trace!("Blocking MTx sent {} more messages", remaining_messages);
         });
 
         // Receive all messages with async multi-receiver in a task
@@ -800,6 +800,6 @@ fn test_mpmc_bounded_async_with_blocking_sender_switch(
             assert!(all_received.contains(&i), "Missing value: {}", i);
         }
 
-        debug!("Successfully switched MPMC from async to blocking sender with buffered messages");
+        trace!("Successfully switched MPMC from async to blocking sender with buffered messages");
     });
 }

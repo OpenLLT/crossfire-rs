@@ -92,7 +92,7 @@ fn test_basic_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTrai
         for _ in 0..(batch_1 + batch_2) {
             match rx.recv() {
                 Ok(i) => {
-                    debug!("recv {}", i);
+                    trace!("recv {}", i);
                 }
                 Err(e) => {
                     panic!("error {}", e);
@@ -154,7 +154,7 @@ fn test_basic_multi_tx_async_1_rx_blocking<R: BlockingRxTrait<usize>>(
         for _ in 0..((batch_1 + batch_2) * tx_count) {
             match rx.recv() {
                 Ok(i) => {
-                    debug!("recv {}", i);
+                    trace!("recv {}", i);
                 }
                 Err(e) => {
                     panic!("error {}", e);
@@ -224,7 +224,7 @@ fn test_pressure_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxT
             match rx.recv() {
                 Ok(i) => {
                     count += 1;
-                    debug!("recv {}", i);
+                    trace!("recv {}", i);
                 }
                 Err(_) => break 'A,
             }
@@ -239,7 +239,7 @@ fn test_pressure_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxT
                 _ => {}
             }
         }
-        debug!("tx exit");
+        debug!("tx{:?} exit", tokio_task_id!());
     });
     let rx_count = th.join().unwrap();
     assert_eq!(rx_count, round);
@@ -274,7 +274,7 @@ fn test_pressure_multi_tx_async_1_rx_blocking<R: BlockingRxTrait<usize>>(
             match rx.recv() {
                 Ok(_i) => {
                     count += 1;
-                    debug!("recv {}", _i);
+                    trace!("recv {}", _i);
                 }
                 Err(_) => break 'A,
             }
@@ -287,13 +287,14 @@ fn test_pressure_multi_tx_async_1_rx_blocking<R: BlockingRxTrait<usize>>(
         for _tx_i in 0..tx_count {
             let _tx = tx.clone();
             th_co.push(async_spawn!(async move {
+                debug!("tx{:?} {} spawn", tokio_task_id!(), _tx_i);
                 for i in 0..round {
                     match _tx.send(i).await {
                         Err(e) => panic!("{}", e),
                         _ => {}
                     }
                 }
-                debug!("tx {} exit", _tx_i);
+                debug!("tx{:?} {} exit", tokio_task_id!(), _tx_i);
             }));
         }
         drop(tx);
@@ -329,12 +330,13 @@ fn test_pressure_multi_tx_async_multi_rx_blocking(
     for _rx_i in 0..rx_count {
         let _rx = rx.clone();
         rx_th_s.push(thread::spawn(move || {
+            debug!("rx {} spawn", _rx_i);
             let mut count = 0;
             'A: loop {
                 match _rx.recv() {
                     Ok(i) => {
                         count += 1;
-                        debug!("recv {} {}", _rx_i, i);
+                        trace!("recv {} {}", _rx_i, i);
                     }
                     Err(_) => break 'A,
                 }
@@ -349,13 +351,14 @@ fn test_pressure_multi_tx_async_multi_rx_blocking(
         for _tx_i in 0..tx_count {
             let _tx = tx.clone();
             th_co.push(async_spawn!(async move {
+                debug!("tx{:?} {} spawn", tokio_task_id!(), _tx_i);
                 for i in 0..round {
                     match _tx.send(i).await {
                         Err(e) => panic!("{}", e),
                         _ => {}
                     }
                 }
-                debug!("tx {} exit", _tx_i);
+                debug!("tx{:?} {} exit", tokio_task_id!(), _tx_i);
             }));
         }
         drop(tx);

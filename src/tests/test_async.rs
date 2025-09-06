@@ -242,7 +242,7 @@ fn test_basic_bounded_1_thread<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
             for i in 0usize..12 {
                 match rx.recv().await {
                     Ok(j) => {
-                        debug!("recv {}", i);
+                        trace!("recv {}", i);
                         assert_eq!(i, j);
                     }
                     Err(e) => {
@@ -286,7 +286,7 @@ fn test_basic_unbounded_1_thread<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usiz
             for i in 0usize..12 {
                 match rx.recv().await {
                     Ok(j) => {
-                        debug!("recv {}", i);
+                        trace!("recv {}", i);
                         assert_eq!(i, j);
                     }
                     Err(e) => {
@@ -336,7 +336,7 @@ fn test_basic_unbounded_idle_select<T: BlockingTxTrait<usize>, R: AsyncRxTrait<u
                 select! {
                     _ = f => {
                         let (_tx_wakers, _rx_wakers) = rx.as_ref().get_wakers_count();
-                        debug!("waker tx {} rx {}", _tx_wakers, _rx_wakers);
+                        trace!("waker tx {} rx {}", _tx_wakers, _rx_wakers);
                     },
                     _ = c => {
                         unreachable!()
@@ -694,13 +694,13 @@ fn test_pressure_bounded_async_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize
                     panic!("{:?}", e);
                 }
             }
-            debug!("tx exit");
+            debug!("tx{:?} exit", tokio_task_id!());
         });
         'A: loop {
             match rx.recv().await {
                 Ok(_i) => {
                     counter += 1;
-                    debug!("recv {}", _i);
+                    trace!("recv {}", _i);
                 }
                 Err(_) => break 'A,
             }
@@ -748,13 +748,14 @@ fn test_pressure_bounded_async_multi_1<R: AsyncRxTrait<usize>>(
         for _tx_i in 0..tx_count {
             let _tx = tx.clone();
             th_s.push(async_spawn!(async move {
+                debug!("tx{:?} {} spawn", tokio_task_id!(), _tx_i);
                 for i in 0..ROUND {
                     match _tx.send(i).await {
                         Err(e) => panic!("{:?}", e),
                         _ => {}
                     }
                 }
-                debug!("tx {} exit", _tx_i);
+                debug!("tx{:?} {} exit", tokio_task_id!(), _tx_i);
             }));
         }
         drop(tx);
@@ -762,7 +763,7 @@ fn test_pressure_bounded_async_multi_1<R: AsyncRxTrait<usize>>(
             match rx.recv().await {
                 Ok(_i) => {
                     counter += 1;
-                    debug!("recv {}", _i);
+                    trace!("recv {}", _i);
                 }
                 Err(_) => break 'A,
             }
@@ -807,29 +808,31 @@ fn test_pressure_bounded_async_multi(
         for _tx_i in 0..tx_count {
             let _tx = tx.clone();
             th_tx.push(async_spawn!(async move {
+                debug!("tx{:?} {} spawn", tokio_task_id!(), _tx_i);
                 for i in 0..ROUND {
                     match _tx.send(i).await {
                         Err(e) => panic!("{:?}", e),
                         _ => {}
                     }
                 }
-                debug!("tx {} exit", _tx_i);
+                debug!("tx{:?} {} exit", tokio_task_id!(), _tx_i);
             }));
         }
         for _rx_i in 0..rx_count {
             let _rx = rx.clone();
             th_rx.push(async_spawn!(async move {
+                debug!("rx{:?} {} spawn", tokio_task_id!(), _rx_i);
                 let mut count = 0;
                 'A: loop {
                     match _rx.recv().await {
                         Ok(_i) => {
                             count += 1;
-                            debug!("recv {} {}", _rx_i, _i);
+                            trace!("recv {} {}", _rx_i, _i);
                         }
                         Err(_) => break 'A,
                     }
                 }
-                debug!("rx {} exit", _rx_i);
+                debug!("rx{:?} {} exit", tokio_task_id!(), _rx_i);
                 count
             }));
         }
@@ -878,7 +881,7 @@ fn test_pressure_bounded_mixed_async_blocking_conversion(
                     _ => {}
                 }
             }
-            debug!("tx async exit");
+            debug!("tx{:?} async exit", tokio_task_id!());
         }));
         let _rx: MRx<usize> = rx.clone().into();
         th_rx.push(thread::spawn(move || {
@@ -887,7 +890,7 @@ fn test_pressure_bounded_mixed_async_blocking_conversion(
                 match _rx.recv() {
                     Ok(_i) => {
                         count += 1;
-                        debug!("recv blocking {}", _i);
+                        trace!("recv blocking {}", _i);
                     }
                     Err(_) => break 'A,
                 }
@@ -902,12 +905,12 @@ fn test_pressure_bounded_mixed_async_blocking_conversion(
                 match rx.recv().await {
                     Ok(_i) => {
                         count += 1;
-                        debug!("recv async {}", _i);
+                        trace!("recv async {}", _i);
                     }
                     Err(_) => break 'A,
                 }
             }
-            debug!("rx async exit");
+            debug!("rx{:?} async exit", tokio_task_id!());
             count
         }));
         for th in co_tx {
@@ -1151,7 +1154,7 @@ fn test_pressure_stream_multi(
                 while let Some(_item) = stream.next().await {
                     counter += 1;
                 }
-                debug!("rx {} exit", rx_i);
+                debug!("rx{:?} {} exit", tokio_task_id!(), rx_i);
                 counter
             }));
         }
@@ -1194,12 +1197,13 @@ fn test_pressure_stream_multi_idle(
         for rx_i in 0..rx_count {
             let _rx = rx.clone();
             th_s.push(async_spawn!(async move {
+                debug!("rx{:?} {} spawn", tokio_task_id!(), rx_i);
                 let mut count = 0;
                 let mut stream = _rx.into_stream();
                 while let Some(_item) = stream.next().await {
                     count += 1;
                 }
-                debug!("rx {} exit", rx_i);
+                debug!("rx{:?} {} exit", tokio_task_id!(), rx_i);
                 count
             }));
         }

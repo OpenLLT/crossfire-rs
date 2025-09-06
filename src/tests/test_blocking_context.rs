@@ -179,7 +179,7 @@ fn test_basic_bounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32>>
             for i in 0i32..12 {
                 match rx.recv() {
                     Ok(j) => {
-                        debug!("recv {}", i);
+                        trace!("recv {}", i);
                         assert_eq!(i, j);
                     }
                     Err(e) => {
@@ -189,7 +189,7 @@ fn test_basic_bounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32>>
             }
             let res = rx.recv();
             assert!(res.is_err());
-            debug!("rx close");
+            trace!("rx close");
         });
         assert!(tx.send(10).is_ok());
         sleep(Duration::from_secs(1));
@@ -222,7 +222,7 @@ fn test_basic_unbounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32
             for i in 0i32..12 {
                 match rx.recv() {
                     Ok(j) => {
-                        debug!("recv {}", i);
+                        trace!("recv {}", i);
                         assert_eq!(i, j);
                     }
                     Err(e) => {
@@ -232,7 +232,7 @@ fn test_basic_unbounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32
             }
             let res = rx.recv();
             assert!(res.is_err());
-            debug!("rx close");
+            trace!("rx close");
         });
         assert!(tx.send(10).is_ok());
         sleep(Duration::from_secs(1));
@@ -313,14 +313,14 @@ fn test_pressure_bounded_blocking_1_1<T: BlockingTxTrait<usize>, R: BlockingRxTr
                     panic!("{:?}", e);
                 }
             }
-            debug!("tx exit");
+            trace!("tx exit");
         });
         let mut count = 0;
         'A: loop {
             match rx.recv() {
                 Ok(_i) => {
                     count += 1;
-                    debug!("recv {}", _i);
+                    trace!("recv {}", _i);
                 }
                 Err(_) => break 'A,
             }
@@ -377,7 +377,7 @@ fn test_pressure_bounded_blocking_multi_1<R: BlockingRxTrait<usize>>(
                         _ => {}
                     }
                 }
-                debug!("tx {} exit", _tx_i);
+                trace!("tx {} exit", _tx_i);
             }));
         }
         drop(tx);
@@ -386,7 +386,7 @@ fn test_pressure_bounded_blocking_multi_1<R: BlockingRxTrait<usize>>(
             match rx.recv() {
                 Ok(_i) => {
                     count += 1;
-                    debug!("recv {}", _i);
+                    trace!("recv {}", _i);
                 }
                 Err(_) => break 'A,
             }
@@ -442,7 +442,7 @@ fn test_pressure_bounded_blocking_multi(
                         _ => {}
                     }
                 }
-                debug!("tx {} exit", _tx_i);
+                trace!("tx {} exit", _tx_i);
             }));
         }
         for _rx_i in 0..rx_count {
@@ -453,12 +453,12 @@ fn test_pressure_bounded_blocking_multi(
                     match _rx.recv() {
                         Ok(_i) => {
                             count += 1;
-                            debug!("recv {} {}", _rx_i, _i);
+                            trace!("recv {} {}", _rx_i, _i);
                         }
                         Err(_) => break 'A,
                     }
                 }
-                debug!("rx {} exit", _rx_i);
+                trace!("rx {} exit", _rx_i);
                 count
             }));
         }
