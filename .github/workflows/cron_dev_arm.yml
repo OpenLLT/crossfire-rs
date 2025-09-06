@@ -19,11 +19,24 @@ jobs:
     - name: Build
       run: cargo build --verbose
 
+      # We use cargo-nextest because cargo test does not forward cancellation signal
+    - uses: taiki-e/install-action@nextest
+
     - name: Run tests with tokio multi-thread
-      run: env WORKFLOW=1 make test
+      run: WORKFLOW=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture
 
     - name: Run tests with --release
-      run: env WORKFLOW=1 make test_release
+      run: WORKFLOW=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture -r
 
     - name: Run tests with --release tokio single-thread
-      run: env WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 make test_release
+      run: WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture -r
+
+    - name: Run tests with --release async_std
+      run: WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 exec cargo nextest run -F="async_std,trace_log" --hide-progress-bar -j 1 --no-capture -r
+
+    - name: Dump log on cancel
+      if: ${{ cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+          name: crossfire_ring
+          path: /tmp/crossfire_ring.log
