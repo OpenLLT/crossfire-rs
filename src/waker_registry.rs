@@ -475,10 +475,6 @@ impl<P> RegistryMulti<P> {
 
     #[inline(always)]
     fn close(&self, _tag: &str) {
-        if self.is_empty.load(Ordering::SeqCst) {
-            trace_log!("close {} is_empty", _tag);
-            return;
-        }
         let mut guard = self.inner.lock();
         while let Some(weak) = guard.queue.pop_front() {
             if let Some(waker) = weak.upgrade() {
