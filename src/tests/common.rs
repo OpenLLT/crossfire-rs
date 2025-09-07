@@ -9,34 +9,30 @@ pub const ROUND: usize = 20;
 pub fn _setup_log() {
     #[cfg(feature = "trace_log")]
     {
-        #[inline(always)]
-        pub fn threaded_format_f(r: FormatRecord) -> String {
-            let time = r.time();
-            let level = r.level();
-            let msg = r.msg();
-            let thread_id = r.thread_id();
-            format!("[{time}][{level}][{:?}] {msg}\n", thread_id).to_string()
-        }
-        let format = LogFormat::new(recipe::DEFAULT_TIME, threaded_format_f);
+        let format = recipe::LOG_FORMAT_THREADED_DEBUG;
         #[cfg(miri)]
         {
             let _ = std::fs::remove_file("/tmp/crossfire_miri.log");
-            let file = LogRawFile::new("/tmp", "crossfire_miri.log", Level::Info, format);
-            captains_log::Builder::default().add_sink(file).test().build().expect("log setup");
+            let file = LogRawFile::new("/tmp", "crossfire_miri.log", Level::Debug, format);
+            captains_log::Builder::default()
+                .tracing_global()
+                .add_sink(file)
+                .test()
+                .build()
+                .expect("log setup");
         }
         #[cfg(not(miri))]
         {
-            let ring = LogRingFile::new(
-                Some(
-                    std::path::Path::new("/tmp/crossfire_ring.log").to_path_buf().into_boxed_path(),
-                ),
-                512 * 1024,
+            let ring = ringfile::LogRingFile::new(
+                "/tmp/crossfire_ring.log",
+                500 * 1024 * 1024,
                 Level::Debug,
                 format,
             );
             let mut config = Builder::default()
                 .signal(signal_consts::SIGINT)
                 .signal(signal_consts::SIGTERM)
+                .tracing_global()
                 .add_sink(ring)
                 .add_sink(LogConsole::new(
                     ConsoleTarget::Stdout,
