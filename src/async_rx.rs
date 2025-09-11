@@ -201,10 +201,7 @@ impl<T> AsyncRx<T> {
                 let r = self.try_recv();
                 if let Err(TryRecvError::Empty) = &r {
                 } else {
-                    #[cfg(feature = "deadlock_debug")]
-                    {
-                        trace_log!("rx: {:?} recv", o_waker);
-                    }
+                    trace_log!("rx: {:?} recv", o_waker);
                     let _ = o_waker.take();
                     return r;
                 }

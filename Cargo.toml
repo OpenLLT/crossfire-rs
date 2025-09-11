@@ -40,7 +40,7 @@ async-channel = {version="2.5.0"}
 default = []
 tokio = ["dep:tokio"]
 async_std = ["dep:async-std"]
-deadlock_debug = ["dep:log"] # for test workflow
+trace_log = ["dep:log"] # for test workflow
 
 [package.metadata.docs.rs]
 all-features = true

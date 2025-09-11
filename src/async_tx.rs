@@ -215,10 +215,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 if let Err(TrySendError::Full(t)) = r {
                     item = t;
                 } else {
-                    #[cfg(feature = "deadlock_debug")]
-                    {
-                        trace_log!("tx: {:?} send", o_waker);
-                    }
+                    trace_log!("tx: {:?} send", o_waker);
                     let _ = o_waker.take();
                     return r;
                 }

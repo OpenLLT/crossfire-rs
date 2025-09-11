@@ -216,7 +216,7 @@ pub mod stream;
 #[macro_export(local_inner_macros)]
 macro_rules! trace_log {
     ($($arg:tt)+)=>{
-        #[cfg(feature="deadlock_debug")]
+        #[cfg(feature="trace_log")]
         {
             log::info!($($arg)+);
         }

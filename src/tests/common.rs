@@ -7,7 +7,7 @@ pub const ROUND: usize = 10000;
 pub const ROUND: usize = 20;
 
 pub fn _setup_log() {
-    #[cfg(feature = "deadlock_debug")]
+    #[cfg(feature = "trace_log")]
     {
         #[cfg(miri)]
         {
@@ -28,7 +28,7 @@ pub fn _setup_log() {
             .expect("log_setup");
         }
     }
-    #[cfg(not(feature = "deadlock_debug"))]
+    #[cfg(not(feature = "trace_log"))]
     {
         let _ = recipe::env_logger("LOG_FILE", "LOG_LEVEL").build().expect("log setup");
     }

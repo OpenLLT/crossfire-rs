@@ -64,7 +64,7 @@ impl RegistryTrait for RegistryDummy {
 
 pub struct RegistrySingle {
     cell: WakerCell,
-    #[cfg(feature = "deadlock_debug")]
+    #[cfg(feature = "trace_log")]
     seq: AtomicU64,
 }
 
@@ -73,7 +73,7 @@ impl RegistrySingle {
     pub fn new() -> Registry {
         Registry::Single(Self {
             cell: WakerCell::new(),
-            #[cfg(feature = "deadlock_debug")]
+            #[cfg(feature = "trace_log")]
             seq: AtomicU64::new(0),
         })
     }
@@ -83,7 +83,7 @@ impl RegistryTrait for RegistrySingle {
     /// return is_skip
     #[inline(always)]
     fn reg_waker(&self, waker: &LockedWaker, _tag: &str) {
-        #[cfg(feature = "deadlock_debug")]
+        #[cfg(feature = "trace_log")]
         {
             let seq = self.seq.fetch_add(1, Ordering::Relaxed);
             waker.set_seq(seq);
