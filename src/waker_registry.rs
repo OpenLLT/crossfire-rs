@@ -58,7 +58,12 @@ impl<T> RegistrySender<T> {
         }
     }
 
-    /// Cancel one outdated waker, make sure it does not accumulate
+    /// remove outdated waker, make sure it does not accumulate.
+    ///
+    /// It's ok to set state with Relaxed here, two scenario:
+    /// * set Done while the state is Init, does not matter other thread see it or not.
+    /// * other thread might have wake it in the process, but we are dropping it anyway, and then
+    /// reg_waker with a new one.
     #[inline(always)]
     pub fn cancel_waker(&self, waker: &SendWaker<T>) {
         match self {
@@ -418,7 +423,7 @@ mod tests {
         // test push
         let waker1 = RecvWaker::new_blocking(());
         assert_eq!(reg.is_empty(), true);
-        waker1.set_state(WakerState::Init);
+        waker1.set_state_relaxed(WakerState::Init);
         reg.reg_waker(&waker1);
         assert_eq!(waker1.get_state(), WakerState::Init as u8);
         assert_eq!(waker1.get_seq(), 0);
@@ -427,7 +432,7 @@ mod tests {
 
         let waker2 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker2);
-        waker2.set_state(WakerState::Waiting);
+        waker2.set_state_relaxed(WakerState::Waiting);
         assert_eq!(waker2.get_seq(), 1);
         assert_eq!(reg.len(), 2);
         assert_eq!(waker2.get_seq(), waker1.get_seq() + 1);
@@ -453,7 +458,7 @@ mod tests {
         // test seq
         let waker3 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker3);
-        waker3.set_state(WakerState::Waiting);
+        waker3.set_state_relaxed(WakerState::Waiting);
         assert_eq!(waker3.get_state(), WakerState::Waiting as u8);
         let waker4 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker4); // Init
@@ -479,7 +484,7 @@ mod tests {
         assert_eq!(waker3.get_state(), WakerState::Init as u8);
         let waker4 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker4); // Init
-        waker4.set_state(WakerState::Waiting);
+        waker4.set_state_relaxed(WakerState::Waiting);
         assert_eq!(waker4.get_state(), WakerState::Waiting as u8);
         for _ in 0..10 {
             let _waker = RecvWaker::new_blocking(());

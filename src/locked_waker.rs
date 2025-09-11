@@ -129,8 +129,10 @@ impl<P> WakerInner<P> {
 
     #[inline(always)]
     pub fn reset(&self, payload: P) {
-        self.state.store(WakerState::Init as u8, Ordering::Release);
+        // From the object pool to reset value,
+        // we should use SeqCst fence to clear the cache of other cores
         *self.get_payload_mut() = payload;
+        self.reset_init();
     }
 
     #[inline(always)]
@@ -177,13 +179,14 @@ impl<P> WakerInner<P> {
         return Ok(());
     }
 
+    /// Only used in cancel_wake, it's ok to use Relaxed
     #[inline(always)]
-    pub fn set_state(&self, state: WakerState) -> u8 {
+    pub fn set_state_relaxed(&self, state: WakerState) {
         let _state = state as u8;
-        #[cfg(test)]
+        #[cfg(all(test, not(feature = "trace_log")))]
         {
             if _state != WakerState::Closed as u8 {
-                let __state = self.get_state();
+                let __state = self.get_state_relaxed();
                 assert!(
                     __state == WakerState::Waked as u8 || __state <= _state as u8,
                     "unexpected set state {:?} on state: {}",
@@ -192,8 +195,14 @@ impl<P> WakerInner<P> {
                 );
             }
         }
-        self.state.store(_state, Ordering::Release);
-        return _state;
+        self.state.store(_state, Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    pub fn reset_init(&self) {
+        // this is before we put into registry (which will extablish happen-before relationship),
+        // it safe to use Relaxed
+        self.state.store(WakerState::Init as u8, Ordering::Relaxed);
     }
 
     /// Return current status,
@@ -260,6 +269,8 @@ impl<P> WakerInner<P> {
     /// Assume no lock
     #[inline(always)]
     pub fn wake(&self) -> WakeResult {
+        // This is after we get waker from waker_registry, which already happen before relationship.
+        // both >= WakerState::Waiting is certain
         let mut state = self.get_state_relaxed();
         loop {
             if state >= WakerState::Waked as u8 {
@@ -334,7 +345,9 @@ impl<T> WakerInner<*const T> {
     where
         F: FnOnce(*const T) -> u8,
     {
-        let mut state = self.get_state();
+        // This is after we get waker from waker_registry, which already happen before relationship.
+        // both >= WakerState::Waiting is certain
+        let mut state = self.get_state_relaxed();
         loop {
             if state >= WakerState::Waked as u8 {
                 return WakeResult::Next;

@@ -246,7 +246,7 @@ impl<T> AsyncRx<T> {
             let _waker;
             if let Some(waker) = o_waker.as_ref() {
                 waker.check_waker_nolock(ctx);
-                waker.set_state(WakerState::Init);
+                waker.reset_init();
                 _waker = waker;
             } else {
                 let waker = RecvWaker::new_async(ctx, ());

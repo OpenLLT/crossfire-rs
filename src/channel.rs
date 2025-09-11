@@ -246,7 +246,7 @@ impl<T> ChannelShared<T> {
         // Not allow Spurious wake and enter this function again;
         if let Some(res) = self.try_send_oneshot(item.as_ptr()) {
             if res {
-                waker.set_state(WakerState::Done);
+                waker.set_state_relaxed(WakerState::Done);
                 self.senders.cancel_waker(&waker);
                 self.on_send();
                 return (WakerState::Done as u8, Some(waker));

@@ -134,7 +134,7 @@ impl<T: Send + 'static> Tx<T> {
         }
         loop {
             let waker = if let Some(w) = o_waker.take() {
-                w.set_state(WakerState::Init);
+                w.reset_init();
                 w
             } else {
                 self.waker_cache.new_blocking(direct_copy_ptr)

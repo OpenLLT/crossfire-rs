@@ -114,7 +114,7 @@ impl<T> Rx<T> {
             let mut state;
             'MAIN: loop {
                 if waker.get_state() == WakerState::Waked as u8 {
-                    waker.set_state(WakerState::Init);
+                    waker.reset_init();
                 }
                 shared.reg_recv(&waker);
                 if shared.is_empty() {
