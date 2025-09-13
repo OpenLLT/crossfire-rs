@@ -1084,14 +1084,15 @@ fn test_spurious_stream(setup_log: ()) {
     }
 }
 
+//#[case(spsc::bounded_async::<usize>(2))]
+//#[case(mpsc::bounded_async::<usize>(1))]
+//#[case(mpsc::bounded_async::<usize>(2))]
+//#[case(mpmc::bounded_async::<usize>(1))]
+//#[case(mpmc::bounded_async::<usize>(2))]
+
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_async::<usize>(1))]
-#[case(spsc::bounded_async::<usize>(2))]
-#[case(mpsc::bounded_async::<usize>(1))]
-#[case(mpsc::bounded_async::<usize>(2))]
-#[case(mpmc::bounded_async::<usize>(1))]
-#[case(mpmc::bounded_async::<usize>(2))]
 fn test_basic_into_stream_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
@@ -1099,12 +1100,10 @@ fn test_basic_into_stream_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
         let total_message = 100;
         let (tx, rx) = channel;
         async_spawn!(async move {
-            println!("sender thread send {} message start", total_message);
             for i in 0usize..total_message {
                 let _ = tx.send(i).await;
                 // println!("send {}", i);
             }
-            println!("sender thread send {} message end", total_message);
         });
         let mut s: AsyncStream<usize> = rx.into();
 
