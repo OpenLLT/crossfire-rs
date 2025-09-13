@@ -29,7 +29,7 @@ log = { version="0", optional=true}
 tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
 rand = "0.9"
 rstest = "0"
-captains-log = {version="0.8", features = ["ringfile"] }
+captains-log = {version="0.12", features = ["ringfile", "tracing"] }
 log = "0"
 criterion2 = { version="3.0.2", features = ["async_tokio"] }
 flume = {version="0.11", features= ["async"] }

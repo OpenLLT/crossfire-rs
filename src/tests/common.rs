@@ -13,8 +13,13 @@ pub fn _setup_log() {
         {
             let _ = std::fs::remove_file("/tmp/crossfire_miri.log");
             let format = LogFormat::new(recipe::DEFAULT_TIME, recipe::prod_format_f);
-            let file = LogRawFile::new("/tmp", "crossfire_miri.log", Level::Info, format);
-            captains_log::Builder::default().add_sink(file).test().build().expect("log setup");
+            let file = LogRawFile::new("/tmp", "crossfire_miri.log", Level::Trace, format);
+            captains_log::Builder::default()
+                .tracing_global()
+                .add_sink(file)
+                .test()
+                .build()
+                .expect("log setup");
         }
         #[cfg(not(miri))]
         {
