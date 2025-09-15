@@ -11,15 +11,21 @@ pub fn _setup_log() {
     {
         #[cfg(miri)]
         {
+            use captains_log::tracing_bridge::*;
             let _ = std::fs::remove_file("/tmp/crossfire_miri.log");
-            let format = LogFormat::new(recipe::DEFAULT_TIME, recipe::prod_format_f);
-            let file = LogRawFile::new("/tmp", "crossfire_miri.log", Level::Trace, format);
-            captains_log::Builder::default()
-                .tracing_global()
-                .add_sink(file)
-                .test()
-                .build()
-                .expect("log setup");
+            let logger = recipe::raw_file_logger_custom(
+                "/tmp/crossfire_miri.log",
+                Level::Trace,
+                recipe::DEFAULT_TIME,
+                recipe::threaded_debug_format_f,
+            )
+            .test()
+            .build()
+            .expect("log setup");
+            let layer =
+                logger.tracing_layer::<TracingText>().unwrap().disable_enter().disable_exit();
+            dispatcher::set_global_default(Dispatch::new(registry().with(layer)))
+                .expect("setup tracing");
         }
         #[cfg(not(miri))]
         {
