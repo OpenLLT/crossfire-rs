@@ -941,6 +941,7 @@ fn test_conversion() {
     let _stream: AsyncStream<usize> = mrx.into(); // AsyncRx -> AsyncStream
 }
 
+#[allow(dead_code)]
 struct SpuriousTx {
     sink: AsyncSink<usize>,
     normal: bool,
@@ -972,6 +973,7 @@ impl Future for SpuriousTx {
     }
 }
 
+#[allow(dead_code)]
 struct SpuriousRx {
     stream: AsyncStream<usize>,
     normal: bool,
