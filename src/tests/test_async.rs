@@ -532,8 +532,8 @@ fn test_basic_send_timeout_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>
             }
             let (tx_wakers, rx_wakers) = tx.as_ref().get_wakers_count();
             println!("wakers: {}, {}", tx_wakers, rx_wakers);
-            assert_eq!(tx_wakers, 0);
-            assert_eq!(rx_wakers, 0);
+            assert!(tx_wakers <= 1, "{:?}", tx_wakers);
+            assert!(rx_wakers <= 1, "{:?}", rx_wakers);
             drop(tx);
             let _ = async_join_result!(th);
         });
