@@ -223,7 +223,7 @@ impl<T> AsyncRx<T> {
                     } else {
                         // Spurious waked by runtime, waker can not be re-used (issue 38)
                         shared.recvs.cancel_waker(&waker);
-                        trace_log!("rx{:?}: cancel {:?}", tokio_task_id!(), waker);
+                        trace_log!("rx{:?}: drop waker {:?}", tokio_task_id!(), waker);
                         let _ = o_waker.take(); // waker cannot be used again
                     }
                 }
@@ -246,23 +246,21 @@ impl<T> AsyncRx<T> {
                     }
                 }
             }
-            let _waker;
-            if let Some(waker) = o_waker.as_ref() {
-                waker.check_waker_nolock(ctx);
-                waker.reset_init();
-                _waker = waker;
+            if let Some(waker) = check_and_reset_async_waker!(o_waker, ctx) {
+                shared.reg_recv(&waker);
+                o_waker.replace(waker);
             } else {
                 let waker = RecvWaker::new_async(ctx, ());
+                shared.reg_recv(&waker);
                 o_waker.replace(waker);
-                _waker = o_waker.as_ref().unwrap();
             }
-            shared.reg_recv(_waker);
             // NOTE: The other side put something whie reg_send and did not see the waker,
             // should check the channel again, otherwise might incur a dead lock.
             if !shared.is_empty() {
                 try_recv!(WakerState::Init as u8);
             }
             if !stream {
+                let _waker = o_waker.as_ref().unwrap();
                 let state = _waker.commit_waiting();
                 trace_log!("rx{:?}: commit_waiting {:?} {}", tokio_task_id!(), _waker, state);
                 if state == WakerState::Waked as u8 {

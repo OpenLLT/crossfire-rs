@@ -443,3 +443,20 @@ pub fn check_timeout(deadline: Option<Instant>) -> Result<Option<Duration>, ()> 
     }
     Ok(None)
 }
+
+macro_rules! check_and_reset_async_waker {
+    ($o_waker: expr, $ctx: expr) => {{
+        if let Some(w) = $o_waker.take() {
+            if w.will_wake($ctx) {
+                w.reset_init();
+                Some(w)
+            } else {
+                // waker can not be re-used (issue 38)
+                None
+            }
+        } else {
+            None
+        }
+    }};
+}
+pub(super) use check_and_reset_async_waker;

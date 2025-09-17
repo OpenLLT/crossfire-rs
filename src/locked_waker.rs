@@ -306,19 +306,6 @@ impl<P> WakerInner<P> {
         }
     }
 
-    /// no lock version
-    #[inline(always)]
-    pub fn check_waker_nolock(&self, ctx: &mut Context) {
-        let o_waker = self.get_waker_mut();
-        if let WakerType::Async(_waker) = o_waker {
-            if !_waker.will_wake(ctx.waker()) {
-                *o_waker = WakerType::Async(ctx.waker().clone());
-            }
-        } else {
-            unreachable!();
-        }
-    }
-
     // Assume the state change have proper fence
     #[inline(always)]
     fn _wake_nolock(&self) {

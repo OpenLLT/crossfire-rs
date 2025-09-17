@@ -206,7 +206,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             trace_log!("tx{:?}: closed {:?}", tokio_task_id!(), o_waker);
             return Poll::Ready(Err(()));
         }
-        let mut _waker;
         let mut state;
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
@@ -257,15 +256,12 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     }
                 }
             }
-            let waker = if let Some(w) = o_waker.take() {
-                w.reset_init();
-                w.check_waker_nolock(ctx);
-                w
+            (state, *o_waker) = if let Some(waker) = check_and_reset_async_waker!(o_waker, ctx) {
+                shared.sender_reg_and_try(item, waker, sink)
             } else {
-                SendWaker::<T>::new_async(ctx, std::ptr::null_mut())
+                let waker = SendWaker::<T>::new_async(ctx, std::ptr::null_mut());
+                shared.sender_reg_and_try(item, waker, sink)
             };
-            (state, _waker) = shared.sender_reg_and_try(item, waker, sink);
-            *o_waker = _waker;
             trace_log!("tx{:?}: sender_reg_and_try {:?} {}", tokio_task_id!(), o_waker, state);
             if state < WakerState::Waked as u8 {
                 return Poll::Pending;
