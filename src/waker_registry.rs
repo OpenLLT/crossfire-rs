@@ -6,7 +6,7 @@ use crate::tokio_task_id;
 use crate::trace_log;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 pub enum RegistrySender<T> {
@@ -319,21 +319,20 @@ impl<P> RegistrySingle<P> {
 
 struct RegistryMultiInner<P> {
     queue: VecDeque<Weak<WakerInner<P>>>,
+    seq: usize,
 }
 
 pub struct RegistryMulti<P> {
     is_empty: AtomicBool,
     inner: Mutex<RegistryMultiInner<P>>,
-    seq: AtomicUsize,
 }
 
 impl<P> RegistryMulti<P> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32) }),
+            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
             is_empty: AtomicBool::new(true),
-            seq: AtomicUsize::new(0),
         }
     }
 
@@ -345,36 +344,42 @@ impl<P> RegistryMulti<P> {
     #[inline(always)]
     fn reg_waker(&self, waker: &ChannelWaker<P>) {
         let weak = waker.weak();
-        let mut guard = self.inner.lock();
-        let seq = self.seq.fetch_add(1, Ordering::Release);
-        waker.set_seq(seq);
-        if guard.queue.is_empty() {
-            self.is_empty.store(false, Ordering::SeqCst);
+        {
+            let mut guard = self.inner.lock();
+            let seq = guard.seq.wrapping_add(1);
+            guard.seq = seq;
+            waker.set_seq(seq);
+            if guard.queue.is_empty() {
+                self.is_empty.store(false, Ordering::SeqCst);
+            }
+            guard.queue.push_back(weak);
         }
-        guard.queue.push_back(weak);
     }
 
     #[inline(always)]
-    fn pop(&self) -> Option<ChannelWaker<P>> {
+    fn pop(&self) -> Option<(ChannelWaker<P>, usize)> {
         if self.is_empty.load(Ordering::SeqCst) {
             return None;
         }
-        let mut guard = self.inner.lock();
-        let mut waker = None;
-        loop {
-            if let Some(weak) = guard.queue.pop_front() {
-                if let Some(inner) = weak.upgrade() {
-                    waker = Some(ChannelWaker::from_arc(inner));
+        let mut res = None;
+        {
+            let mut guard = self.inner.lock();
+            loop {
+                if let Some(weak) = guard.queue.pop_front() {
+                    if let Some(inner) = weak.upgrade() {
+                        res = Some((ChannelWaker::from_arc(inner), guard.seq));
+                        if guard.queue.is_empty() {
+                            self.is_empty.store(true, Ordering::SeqCst);
+                        }
+                        break;
+                    }
+                } else {
+                    self.is_empty.store(true, Ordering::SeqCst);
                     break;
                 }
-            } else {
-                break;
             }
         }
-        if guard.queue.is_empty() {
-            self.is_empty.store(true, Ordering::SeqCst);
-        }
-        return waker;
+        return res;
     }
 
     #[inline(always)]
@@ -382,24 +387,24 @@ impl<P> RegistryMulti<P> {
     where
         F: Fn(&ChannelWaker<P>) -> WakeResult,
     {
-        if let Some(waker) = self.pop() {
+        if let Some((waker, mut last_seq)) = self.pop() {
             let r = handle(&waker);
             trace_log!("wake {} {:?} {:?}", _tag, waker, r);
             if r.is_done() {
                 return r;
             }
-            let seq = self.seq.load(Ordering::SeqCst);
-            while let Some(waker) = self.pop() {
-                let r = handle(&waker);
-                trace_log!("wake {} {:?} {:?}", _tag, waker, r);
+            last_seq = last_seq.wrapping_sub(1);
+            while let Some((_waker, _)) = self.pop() {
+                let r = handle(&_waker);
+                trace_log!("wake {} {:?} {:?}", _tag, _waker, r);
                 if r.is_done() {
                     return r;
                 }
                 // The latest seq in RegistryMulti is always last_waker.get_seq() +1
                 // Because some waker (issued by sink / stream) might be INIT all the time,
                 // prevent to dead loop situation when they are wake up and re-register again.
-                if waker.get_seq().wrapping_add(1) >= seq {
-                    trace_log!("stop {} wake at {}", _tag, seq);
+                if _waker.get_seq() >= last_seq {
+                    trace_log!("wake {} stop at {}", _tag, last_seq);
                     return WakeResult::Next;
                 }
             }
@@ -458,8 +463,8 @@ impl<P> RegistryMulti<P> {
                 return;
             }
             loop {
-                if let Some(weak) = guard.queue.pop_front() {
-                    if process!(guard, weak) {
+                if let Some(_weak) = guard.queue.pop_front() {
+                    if process!(guard, _weak) {
                         if guard.queue.is_empty() {
                             self.is_empty.store(true, Ordering::SeqCst);
                         }
@@ -508,25 +513,25 @@ mod tests {
         waker1.set_state_relaxed(WakerState::Init);
         reg.reg_waker(&waker1);
         assert_eq!(waker1.get_state(), WakerState::Init as u8);
-        assert_eq!(waker1.get_seq(), 0);
+        assert_eq!(waker1.get_seq(), 1);
         assert_eq!(reg.is_empty(), false);
         assert_eq!(reg.len(), 1);
 
         let waker2 = RecvWaker::new_blocking(());
         reg.reg_waker(&waker2);
         waker2.set_state_relaxed(WakerState::Waiting);
-        assert_eq!(waker2.get_seq(), 1);
+        assert_eq!(waker2.get_seq(), 2);
         assert_eq!(reg.len(), 2);
         assert_eq!(waker2.get_seq(), waker1.get_seq() + 1);
         assert_eq!(waker2.get_state(), WakerState::Waiting as u8);
 
-        if let Some(w) = reg.pop() {
+        if let Some((w, _)) = reg.pop() {
             assert!(w.wake() == WakeResult::Next);
         }
         assert_eq!(waker1.get_state(), WakerState::Waked as u8);
         assert_eq!(reg.len(), 1);
         assert_eq!(reg.is_empty(), false);
-        if let Some(w) = reg.pop() {
+        if let Some((w, _)) = reg.pop() {
             assert!(w.wake() == WakeResult::Waked);
         }
         assert_eq!(waker2.get_state(), WakerState::Waked as u8);
