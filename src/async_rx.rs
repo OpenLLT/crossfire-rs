@@ -193,12 +193,12 @@ impl<T> AsyncRx<T> {
                     return Ok(item);
                 }
             };
-            ($cancel: expr) => {
+            ($state: expr) => {
                 if let Some(item) = shared.try_recv() {
                     shared.on_recv();
                     if let Some(waker) = o_waker.take() {
-                        if $cancel {
-                            shared.recv_waker_cancel(&waker);
+                        if $state < WakerState::Waked as u8 {
+                            shared.recvs.cancel_waker(&waker);
                         }
                     }
                     return Ok(item);
@@ -207,24 +207,21 @@ impl<T> AsyncRx<T> {
         }
         loop {
             if let Some(waker) = o_waker.as_ref() {
-                let mut state = waker.get_state();
+                let state = waker.get_state();
                 if state < WakerState::Waked as u8 {
                     if waker.will_wake(ctx) {
                         // Spurious waked by runtime, or
                         // Normally only selection or multiplex future will get here.
                         // No need to reg again, since waker is not consumed.
+                        try_recv!(state);
                         break;
                     } else {
-                        match waker.abandon() {
-                            Ok(_) => {
-                                shared.recvs.cancel_waker(&waker);
-                                let _ = o_waker.take(); // waker cannot be used again
-                            }
-                            Err(_state) => state = _state, // waker is waked, can be reused
-                        }
+                        // Spurious waked by runtime, waker can not be re-used (issue 38)
+                        shared.recvs.cancel_waker(&waker);
+                        let _ = o_waker.take(); // waker cannot be used again
                     }
                 }
-                try_recv!(false);
+                try_recv!(state);
                 if state == WakerState::Closed as u8 {
                     return Err(TryRecvError::Disconnected);
                 }
@@ -257,7 +254,7 @@ impl<T> AsyncRx<T> {
             // NOTE: The other side put something whie reg_send and did not see the waker,
             // should check the channel again, otherwise might incur a dead lock.
             if !shared.is_empty() {
-                try_recv!(true);
+                try_recv!(WakerState::Init as u8);
             }
             if !stream {
                 let state = _waker.commit_waiting();
@@ -268,7 +265,7 @@ impl<T> AsyncRx<T> {
             break;
         }
         if shared.is_disconnected() {
-            try_recv!(true);
+            try_recv!(WakerState::Closed as u8);
             return Err(TryRecvError::Disconnected);
         } else {
             return Err(TryRecvError::Empty);

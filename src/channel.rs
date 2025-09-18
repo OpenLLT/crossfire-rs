@@ -247,6 +247,8 @@ impl<T> ChannelShared<T> {
 
     /// if need_wake == true, called from on_recv(), when return None indicates try to wake up next.
     /// when need_wake == false, will always return Some(state).
+    ///
+    /// NOTE: when return state=Done, the waker is not set to Done
     #[inline]
     pub(crate) fn sender_reg_and_try(
         &self, item: &MaybeUninit<T>, waker: SendWaker<T>, sink: bool,
@@ -255,10 +257,8 @@ impl<T> ChannelShared<T> {
         // Not allow Spurious wake and enter this function again;
         if let Some(res) = self.try_send_oneshot(item.as_ptr()) {
             if res {
-                waker.set_state_relaxed(WakerState::Done);
-                self.senders.cancel_waker(&waker);
                 self.on_send();
-                return (WakerState::Done as u8, Some(waker));
+                return self.senders.cancel_reuse_waker(waker, WakerState::Done);
             } else {
                 if sink {
                     if self.is_disconnected() {
@@ -279,19 +279,8 @@ impl<T> ChannelShared<T> {
                 }
             }
         } else {
-            match waker.try_change_state(WakerState::Init, WakerState::Waked) {
-                Ok(_) => {
-                    self.senders.cancel_waker(&waker);
-                    // Unlikely to be disconnected,
-                    // might be in queue, should not use again
-                    // Retry send outside
-                    return (WakerState::Waked as u8, None);
-                }
-                Err(state) => {
-                    // changed by waker, might be: COPY, Waked, or Done.
-                    return (state, Some(waker));
-                }
-            }
+            // Unlikely to be disconnected,
+            return self.senders.cancel_reuse_waker(waker, WakerState::Waked);
         }
     }
 
@@ -340,13 +329,6 @@ impl<T> ChannelShared<T> {
         })
     }
 
-    #[inline(always)]
-    pub(crate) fn recv_waker_cancel(&self, waker: &RecvWaker) {
-        if waker.cancel() {
-            self.recvs.cancel_waker(&waker);
-        }
-    }
-
     /// Call on cancellation, return true to indicate drop temporary message
     /// return false to indicate already Done.
     #[inline(always)]
@@ -359,17 +341,20 @@ impl<T> ChannelShared<T> {
             }
             Err(state) => {
                 trace_log!("tx: abandon err  {:?} {}", waker, state);
-                if state == WakerState::Done as u8 {
-                    return false;
-                } else if state == WakerState::Init as u8 {
-                    // For AsyncSink::poll_send, clear only one
-                    self.senders.cancel_waker(&waker);
-                    return true;
-                } else {
-                    debug_assert_eq!(state, WakerState::Waked as u8);
+                if state == WakerState::Waked as u8 {
                     // We are waked, but give up sending, should notify another sender for safety
                     self.on_recv();
                     return true;
+                } else if state == WakerState::Closed as u8 {
+                    return true;
+                } else if state == WakerState::Init as u8 {
+                    // For dropping AsyncSink, clear only one
+                    self.senders.cancel_waker(&waker);
+                    return true;
+                } else {
+                    debug_assert_eq!(state, WakerState::Done as u8);
+                    // Unused code for direct_copy
+                    return false;
                 }
             }
         }
@@ -386,17 +371,21 @@ impl<T> ChannelShared<T> {
             }
             Err(state) => {
                 trace_log!("rx: abandon err {:?} {}", waker, state);
-                if state == WakerState::Init as u8 {
+                if state == WakerState::Waked as u8 {
+                    // We are waked, but give up receiving, should notify another receiver for safety
+                    self.on_send();
+                    return true;
+                } else if state == WakerState::Closed as u8 {
+                    // Closed
+                    return true;
+                } else if state == WakerState::Init as u8 {
                     // For AsyncStream::poll_item, clear only one
                     self.recvs.cancel_waker(&waker);
                     return true;
                 } else {
-                    if state == WakerState::Waked as u8 {
-                        // We are waked, but give up receiving, should notify another receiver for safety
-                        self.on_send();
-                    }
-                    // Closed
-                    return true;
+                    debug_assert_eq!(state, WakerState::Done as u8);
+                    // Unused code for direct_copy
+                    return false;
                 }
             }
         }

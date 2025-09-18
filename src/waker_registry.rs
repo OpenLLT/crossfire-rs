@@ -56,6 +56,11 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn clear_wakers(&self, waker: &SendWaker<T>) {
         match self {
+            RegistrySender::Single(inner) => {
+                if inner.clear() {
+                    trace_log!("tx: clear {:?}", waker);
+                }
+            }
             RegistrySender::Multi(inner) => inner.clear_wakers(waker, false, "tx"),
             _ => {}
         }
@@ -68,9 +73,66 @@ impl<T> RegistrySender<T> {
     /// * other thread might have wake it in the process, but we are dropping it anyway, and then
     /// reg_waker with a new one.
     #[inline(always)]
+    pub fn cancel_reuse_waker(
+        &self, waker: SendWaker<T>, state: WakerState,
+    ) -> (u8, Option<SendWaker<T>>) {
+        match self {
+            RegistrySender::Multi(inner) => {
+                let cur_state = waker.get_state_relaxed();
+                // If we se Waked here, only possible otherside has waked it
+                if cur_state >= WakerState::Waked as u8 {
+                    if cur_state < state as u8 {
+                        waker.set_state_relaxed(state);
+                        trace_log!("tx: cancel_reuse {:?} {:?}", waker, state);
+                        return (state as u8, Some(waker));
+                    } else {
+                        trace_log!("tx: cancel_reuse {:?} {}", waker, cur_state);
+                        return (cur_state, Some(waker));
+                    }
+                } else {
+                    inner.clear_wakers(&waker, true, "tx");
+                    return (state as u8, None);
+                }
+            }
+            RegistrySender::Single(inner) => {
+                if inner.clear() {
+                    let cur_state = waker.get_state_relaxed();
+                    if cur_state < state as u8 {
+                        waker.set_state_relaxed(state);
+                        trace_log!("tx: cancel_reuse {:?} {:?}", waker, state);
+                        return (state as u8, Some(waker));
+                    } else {
+                        trace_log!("tx: cancel_reuse {:?} {}", waker, cur_state);
+                        return (cur_state, Some(waker));
+                    }
+                } else {
+                    trace_log!("tx: cancel {:?} taken", waker);
+                    return (state as u8, None);
+                }
+            }
+            _ => {
+                unreachable!();
+            }
+        }
+    }
+
+    /// remove outdated waker, make sure it does not accumulate.
+    ///
+    /// It's ok to set state with Relaxed here, two scenario:
+    /// * set Done while the state is Init, does not matter other thread see it or not.
+    /// * other thread might have wake it in the process, but we are dropping it anyway, and then
+    /// reg_waker with a new one.
+    #[inline(always)]
     pub fn cancel_waker(&self, waker: &SendWaker<T>) {
         match self {
-            RegistrySender::Multi(inner) => inner.clear_wakers(waker, true, "tx"),
+            RegistrySender::Multi(inner) => {
+                let cur_state = waker.get_state_relaxed();
+                // If we se Waked here, only possible otherside has waked it
+                if cur_state >= WakerState::Waked as u8 {
+                    return;
+                }
+                inner.clear_wakers(&waker, true, "tx");
+            }
             _ => {}
         }
     }
@@ -167,7 +229,11 @@ impl RegistryRecv {
     pub fn clear_wakers(&self, waker: &RecvWaker) {
         match self {
             RegistryRecv::Multi(inner) => inner.clear_wakers(waker, false, "rx"),
-            _ => {}
+            RegistryRecv::Single(inner) => {
+                if inner.clear() {
+                    trace_log!("clear rx waker {:?}", waker);
+                }
+            }
         }
     }
 
@@ -176,6 +242,10 @@ impl RegistryRecv {
     pub fn cancel_waker(&self, waker: &RecvWaker) {
         match self {
             RegistryRecv::Multi(inner) => {
+                // If we se Waked here, only possible otherside has waked it
+                if waker.get_state_relaxed() >= WakerState::Waked as u8 {
+                    return;
+                }
                 inner.clear_wakers(waker, true, "rx");
             }
             _ => {}
@@ -221,10 +291,11 @@ impl<P> RegistrySingle<P> {
         self.cell.put(waker.weak());
     }
 
+    /// return true when clear the waker in registry, false when nothing
     #[inline(always)]
-    fn cancel_waker(&self) {
+    fn clear(&self) -> bool {
         // Got to be it, because only one single thread.
-        self.cell.clear();
+        self.cell.clear()
     }
 
     #[inline(always)]

@@ -10,7 +10,7 @@ use std::sync::{
 use std::task::*;
 use std::thread;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum WakerState {
     Init = 0, // A temporary state, https://github.com/frostyplanet/crossfire-rs/issues/22
@@ -158,12 +158,6 @@ impl<P> WakerInner<P> {
         } else {
             return WakerState::Waiting as u8;
         }
-    }
-
-    /// Return true if the canceled waker is not woken
-    #[inline(always)]
-    pub fn cancel(&self) -> bool {
-        self.state.swap(WakerState::Waked as u8, Ordering::SeqCst) < WakerState::Waked as u8
     }
 
     #[inline(always)]

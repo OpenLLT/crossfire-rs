@@ -122,7 +122,7 @@ impl<T> Rx<T> {
                 } else {
                     if let Some(item) = shared.try_recv() {
                         shared.on_recv();
-                        shared.recv_waker_cancel(&waker);
+                        self.recvs.cancel_waker(&waker);
                         return Ok(item);
                     }
                     state = waker.commit_waiting();

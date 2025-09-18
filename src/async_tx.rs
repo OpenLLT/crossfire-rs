@@ -219,20 +219,9 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                         // No need to reg again, since waker is not consumed.
                         return Poll::Pending;
                     } else {
-                        // Spurious waked by runtime
-                        match waker.abandon() {
-                            Ok(_) => {
-                                self.senders.cancel_waker(&waker);
-                                let _ = o_waker.take();
-                            }
-                            Err(state) => {
-                                if state == WakerState::Closed as u8 {
-                                    let _ = o_waker.take();
-                                    return Poll::Ready(Err(()));
-                                }
-                                // waker is waked, can be reused
-                            }
-                        }
+                        // Spurious waked by runtime, waker can not be re-used (issue 38)
+                        self.senders.cancel_waker(waker);
+                        let _ = o_waker.take();
                     }
                 }
                 if shared.send(item) {
