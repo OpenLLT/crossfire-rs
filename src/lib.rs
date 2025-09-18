@@ -242,5 +242,19 @@ macro_rules! trace_log {
     };
 }
 
+#[macro_export(local_inner_macros)]
+macro_rules! tokio_task_id {
+    () => {{
+        #[cfg(all(feature = "trace_log", feature = "tokio"))]
+        {
+            tokio::task::try_id()
+        }
+        #[cfg(not(all(feature = "trace_log", feature = "tokio")))]
+        {
+            ""
+        }
+    }};
+}
+
 #[cfg(test)]
 mod tests;
