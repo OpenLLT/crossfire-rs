@@ -40,7 +40,7 @@ impl<P> fmt::Debug for ChannelWaker<P> {
 
 impl<P> fmt::Debug for WakerInner<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "waker({} state={})", self.get_seq(), self.get_state())
+        write!(f, "waker({})", self.get_seq())
     }
 }
 
