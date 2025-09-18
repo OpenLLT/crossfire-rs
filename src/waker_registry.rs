@@ -385,14 +385,14 @@ impl<P> RegistryMulti<P> {
         if let Some(waker) = self.pop() {
             let r = handle(&waker);
             trace_log!("wake {} {:?} {:?}", _tag, waker, r);
-            if r != WakeResult::Next {
+            if r.is_done() {
                 return r;
             }
             let seq = self.seq.load(Ordering::SeqCst);
             while let Some(waker) = self.pop() {
                 let r = handle(&waker);
                 trace_log!("wake {} {:?} {:?}", _tag, waker, r);
-                if r != WakeResult::Next {
+                if r.is_done() {
                     return r;
                 }
                 // The latest seq in RegistryMulti is always last_waker.get_seq() +1

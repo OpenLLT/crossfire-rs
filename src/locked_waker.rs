@@ -21,11 +21,20 @@ pub enum WakerState {
     Done = 5,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
+#[repr(u8)]
 pub enum WakeResult {
-    Sent,
-    Next,
-    Waked,
+    Waked = 0x1, // Waked, stop iteration
+    Sent = 0x3,  // Waked with message direct copied
+    Next = 0x2,  // Waked, but have to continued for more iteration
+    Skip = 0x4,  // Waker Cancelled or Done
+}
+
+impl WakeResult {
+    #[inline]
+    pub fn is_done(&self) -> bool {
+        (*self as u8) & 0x1 == 0x1
+    }
 }
 
 /// Although removing direct copy feature of the payload pointer is not used,
@@ -269,7 +278,7 @@ impl<P> WakerInner<P> {
         let mut state = self.get_state_relaxed();
         loop {
             if state >= WakerState::Waked as u8 {
-                return WakeResult::Next;
+                return WakeResult::Skip;
             } else if state == WakerState::Waiting as u8 {
                 self.state.store(WakerState::Waked as u8, Ordering::SeqCst);
                 self._wake_nolock();
@@ -332,7 +341,7 @@ impl<T> WakerInner<*const T> {
         let mut state = self.get_state_relaxed();
         loop {
             if state >= WakerState::Waked as u8 {
-                return WakeResult::Next;
+                return WakeResult::Skip;
             } else if state == WakerState::Waiting as u8 {
                 let p = self.get_payload();
                 if p == std::ptr::null_mut() {
