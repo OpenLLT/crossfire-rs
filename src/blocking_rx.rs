@@ -90,7 +90,7 @@ impl<T> Rx<T> {
                 () => {
                     if let Some(item) = shared.try_recv() {
                         shared.on_recv();
-                        trace_log!("rx: recv");
+                        //trace_log!("rx: recv");
                         return Ok(item);
                     }
                 };

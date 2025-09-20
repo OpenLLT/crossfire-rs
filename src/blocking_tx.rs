@@ -101,7 +101,7 @@ impl<T: Send + 'static> Tx<T> {
                     }
                     _ => {
                         shared.on_send();
-                        trace_log!("tx: send");
+                        //trace_log!("tx: send");
                         std::thread::yield_now();
                         return Ok(());
                     }
@@ -114,7 +114,7 @@ impl<T: Send + 'static> Tx<T> {
                     continue;
                 }
                 shared.on_send();
-                trace_log!("tx: send");
+                //trace_log!("tx: send");
                 return Ok(());
             }
         }
