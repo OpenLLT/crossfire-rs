@@ -211,11 +211,18 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         loop {
+            if shared.send(item) {
+                shared.on_send();
+                if let Some(_waker) = o_waker.take() {
+                    trace_log!("tx{:?}: send {:?}", tokio_task_id!(), _waker);
+                } else {
+                    trace_log!("tx{:?}: send", tokio_task_id!());
+                }
+                return Poll::Ready(Ok(()));
+            }
             if let Some(waker) = o_waker.as_ref() {
                 state = waker.get_state();
-                if state == WakerState::Closed as u8 {
-                    return Poll::Ready(Err(()));
-                } else if state < WakerState::Waked as u8 {
+                if state < WakerState::Waked as u8 {
                     if waker.will_wake(ctx) {
                         trace_log!("tx{:?}: will_wake {:?}", tokio_task_id!(), waker);
                         // Normally only selection or multiplex future will get here.
@@ -227,19 +234,10 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                         trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
                         let _ = o_waker.take();
                     }
-                }
-                if shared.send(item) {
-                    trace_log!("tx{:?}: send {:?} {}", tokio_task_id!(), o_waker, state);
-                    shared.on_send();
-                    let _ = o_waker.take();
-                    return Poll::Ready(Ok(()));
+                } else if state == WakerState::Closed as u8 {
+                    return Poll::Ready(Err(()));
                 }
             } else {
-                if shared.send(item) {
-                    shared.on_send();
-                    trace_log!("tx{:?}: send", tokio_task_id!());
-                    return Poll::Ready(Ok(()));
-                }
                 let cfg = self.get_backoff_cfg();
                 if cfg.limit > 0 {
                     let mut _backoff = Backoff::new(cfg);

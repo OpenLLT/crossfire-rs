@@ -198,7 +198,7 @@ impl<T> AsyncRx<T> {
                             shared.recvs.cancel_waker(&waker);
                         }
                     } else {
-                        trace_log!("rx{:?}: recv}", tokio_task_id!());
+                        trace_log!("rx{:?}: recv", tokio_task_id!());
                     }
                     return Ok(item);
                 }
