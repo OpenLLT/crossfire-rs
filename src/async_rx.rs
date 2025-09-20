@@ -189,28 +189,25 @@ impl<T> AsyncRx<T> {
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         macro_rules! try_recv {
-            () => {
-                if let Some(item) = shared.try_recv() {
-                    shared.on_recv();
-                    trace_log!("rx{:?}: recv", tokio_task_id!());
-                    return Ok(item);
-                }
-            };
             ($state: expr) => {
                 if let Some(item) = shared.try_recv() {
                     shared.on_recv();
                     if let Some(waker) = o_waker.take() {
-                        trace_log!("rx{:?}: recv {:?}", tokio_task_id!(), waker);
+                        trace_log!("rx{:?}: recv {:?} {}", tokio_task_id!(), waker, $state);
                         if $state < WakerState::Waked as u8 {
                             shared.recvs.cancel_waker(&waker);
                         }
+                    } else {
+                        trace_log!("rx{:?}: recv}", tokio_task_id!());
                     }
                     return Ok(item);
                 }
             };
         }
         loop {
+            try_recv!(WakerState::Waked as u8);
             if let Some(waker) = o_waker.as_ref() {
+                // As the channel is busy, waker will be cancel by others
                 let state = waker.get_state();
                 if state < WakerState::Waked as u8 {
                     if waker.will_wake(ctx) {
@@ -218,7 +215,6 @@ impl<T> AsyncRx<T> {
                         // Normally only selection or multiplex future will get here.
                         // No need to reg again, since waker is not consumed.
                         trace_log!("rx{:?}: will_wake {:?}", tokio_task_id!(), waker);
-                        try_recv!(state);
                         break;
                     } else {
                         // Spurious waked by runtime, waker can not be re-used (issue 38)
@@ -226,20 +222,21 @@ impl<T> AsyncRx<T> {
                         trace_log!("rx{:?}: drop waker {:?}", tokio_task_id!(), waker);
                         let _ = o_waker.take(); // waker cannot be used again
                     }
-                }
-                try_recv!(state);
-                if state == WakerState::Closed as u8 {
+                } else if state == WakerState::Closed as u8 {
                     break;
                 }
             } else {
                 // First call
-                try_recv!();
                 let cfg = self.get_backoff_cfg();
                 if cfg.limit > 0 {
                     let mut backoff = Backoff::new(cfg);
                     loop {
                         backoff.spin();
-                        try_recv!();
+                        if let Some(item) = shared.try_recv() {
+                            shared.on_recv();
+                            trace_log!("rx{:?}: recv", tokio_task_id!());
+                            return Ok(item);
+                        }
                         if backoff.is_completed() {
                             break;
                         }
