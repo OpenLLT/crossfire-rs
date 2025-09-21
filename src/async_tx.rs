@@ -245,7 +245,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 if let Some(_waker) = o_waker.take() {
                     trace_log!("tx{:?}: send {:?}", tokio_task_id!(), _waker);
                 } else {
-                    trace_log!("tx{:?}: send", tokio_task_id!());
+                    //trace_log!("tx{:?}: send", tokio_task_id!());
                 }
                 return Poll::Ready(Ok(()));
             }
@@ -280,7 +280,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                         backoff.spin();
                         if shared.send(item) {
                             shared.on_send();
-                            trace_log!("tx{:?}: send", tokio_task_id!());
+                            //trace_log!("tx{:?}: send", tokio_task_id!());
                             return Poll::Ready(Ok(()));
                         }
                         if backoff.is_completed() {

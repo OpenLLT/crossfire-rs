@@ -225,8 +225,6 @@ impl<T> AsyncRx<T> {
                         if $state < WakerState::Waked as u8 {
                             shared.recvs.cancel_waker(&waker);
                         }
-                    } else {
-                        trace_log!("rx{:?}: recv", tokio_task_id!());
                     }
                     return Ok(item);
                 }
