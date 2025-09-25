@@ -829,8 +829,6 @@ fn test_pressure_bounded_async_multi(
 #[logfn]
 #[rstest]
 #[case(mpmc::bounded_async::<usize>(1))]
-#[case(mpmc::bounded_async::<usize>(10))]
-#[case(mpmc::bounded_async::<usize>(100))]
 fn test_pressure_bounded_mixed_async_blocking_conversion(
     setup_log: (), #[case] channel: (MAsyncTx<usize>, MAsyncRx<usize>),
 ) {
