@@ -253,23 +253,30 @@ impl<T> AsyncRx<T> {
         loop {
             try_recv!(WakerState::Waked as u8);
             if let Some(waker) = o_waker.as_ref() {
-                // As the channel is busy, waker will be cancel by others
-                let state = waker.get_state();
-                if state < WakerState::Waked as u8 {
-                    if waker.will_wake(ctx) {
-                        // Spurious waked by runtime, or
-                        // Normally only selection or multiplex future will get here.
-                        // No need to reg again, since waker is not consumed.
-                        trace_log!("rx{:?}: will_wake {:?}", tokio_task_id!(), waker);
-                        break;
-                    } else {
-                        // Spurious waked by runtime, waker can not be re-used (issue 38)
-                        shared.recvs.cancel_waker(&waker);
-                        trace_log!("rx{:?}: drop waker {:?}", tokio_task_id!(), waker);
-                        let _ = o_waker.take(); // waker cannot be used again
+                match waker.try_change_state(WakerState::Waked, WakerState::Init) {
+                    Ok(_) => {
+                        if !waker.will_wake(ctx) {
+                            let _ = o_waker.take();
+                        }
                     }
-                } else if state == WakerState::Closed as u8 {
-                    break;
+                    Err(state) => {
+                        if state < WakerState::Waked as u8 {
+                            if waker.will_wake(ctx) {
+                                // Spurious waked by runtime, or
+                                // Normally only selection or multiplex future will get here.
+                                // No need to reg again, since waker is not consumed.
+                                trace_log!("rx{:?}: will_wake {:?}", tokio_task_id!(), waker);
+                                break;
+                            } else {
+                                // Spurious waked by runtime, waker can not be re-used (issue 38)
+                                shared.recvs.cancel_waker(&waker);
+                                trace_log!("rx{:?}: drop waker {:?}", tokio_task_id!(), waker);
+                                let _ = o_waker.take(); // waker cannot be used again
+                            }
+                        } else if state == WakerState::Closed as u8 {
+                            break;
+                        }
+                    }
                 }
             } else {
                 // First call
@@ -289,7 +296,7 @@ impl<T> AsyncRx<T> {
                     }
                 }
             }
-            if let Some(waker) = check_and_reset_async_waker!(o_waker, ctx) {
+            if let Some(waker) = o_waker.take() {
                 shared.reg_recv(&waker);
                 o_waker.replace(waker);
             } else {
