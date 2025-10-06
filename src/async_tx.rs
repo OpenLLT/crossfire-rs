@@ -250,29 +250,21 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 return Poll::Ready(Ok(()));
             }
             if let Some(waker) = o_waker.as_ref() {
-                match waker.try_change_state(WakerState::Waked, WakerState::Init) {
-                    Ok(_) => {
-                        if !waker.will_wake(ctx) {
-                            let _ = o_waker.take();
-                        }
+                state = waker.get_state();
+                if state < WakerState::Waked as u8 {
+                    if waker.will_wake(ctx) {
+                        trace_log!("tx{:?}: will_wake {:?}", tokio_task_id!(), waker);
+                        // Normally only selection or multiplex future will get here.
+                        // No need to reg again, since waker is not consumed.
+                        return Poll::Pending;
+                    } else {
+                        // Spurious waked by runtime, waker can not be re-used (issue 38)
+                        self.senders.cancel_waker(waker);
+                        trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
+                        let _ = o_waker.take();
                     }
-                    Err(state) => {
-                        if state < WakerState::Waked as u8 {
-                            if waker.will_wake(ctx) {
-                                trace_log!("tx{:?}: will_wake {:?}", tokio_task_id!(), waker);
-                                // Normally only selection or multiplex future will get here.
-                                // No need to reg again, since waker is not consumed.
-                                return Poll::Pending;
-                            } else {
-                                // Spurious waked by runtime, waker can not be re-used (issue 38)
-                                self.senders.cancel_waker(waker);
-                                trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
-                                let _ = o_waker.take();
-                            }
-                        } else if state == WakerState::Closed as u8 {
-                            return Poll::Ready(Err(()));
-                        }
-                    }
+                } else if state == WakerState::Closed as u8 {
+                    return Poll::Ready(Err(()));
                 }
             } else {
                 if let Some(mut backoff) = shared.get_async_backoff() {
@@ -289,7 +281,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     }
                 }
             }
-            (state, *o_waker) = if let Some(waker) = o_waker.take() {
+            (state, *o_waker) = if let Some(waker) = check_and_reset_async_waker!(o_waker, ctx) {
                 shared.sender_reg_and_try(item, waker, sink)
             } else {
                 let waker = SendWaker::<T>::new_async(ctx, std::ptr::null_mut());
