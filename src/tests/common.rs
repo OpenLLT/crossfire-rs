@@ -74,7 +74,7 @@ macro_rules! runtime_block_on {
                     log::info!("run with tokio multi thread");
                     tokio::runtime::Builder::new_multi_thread()
                 };
-                rt.enable_all().build().unwrap().block_on($f)
+                rt.build().unwrap().block_on($f)
             }
         }
     }};
