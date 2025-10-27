@@ -147,7 +147,7 @@ impl<T: Send + 'static> Tx<T> {
             // For nxn (the backoff is already complete), wait a little bit.
             (state, o_waker) = shared.sender_reg_and_try(&item, waker, false);
             trace_log!("tx: sender_reg_and_try {:?} state={}", o_waker, state);
-            while state < WakerState::Waked as u8 {
+            while state < WakerState::Woken as u8 {
                 if direct_copy_ptr != std::ptr::null_mut() {
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
                 }
@@ -176,7 +176,7 @@ impl<T: Send + 'static> Tx<T> {
             }
             if state == WakerState::Done as u8 {
                 return_ok!();
-            } else if state == WakerState::Waked as u8 {
+            } else if state == WakerState::Woken as u8 {
                 backoff.reset();
                 loop {
                     if shared.send(&item) {

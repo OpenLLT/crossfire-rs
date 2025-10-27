@@ -16,7 +16,7 @@ pub enum WakerState {
     Init = 0, // A temporary state, https://github.com/frostyplanet/crossfire-rs/issues/22
     Waiting = 1,
     //Copy = 2, // Omit due to skipping direct copy on async or with deadline
-    Waked = 3,
+    Woken = 3,
     Closed = 4, // Channel closed, or timeout cancellation
     Done = 5,
 }
@@ -24,9 +24,9 @@ pub enum WakerState {
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum WakeResult {
-    Waked = 0x1, // Waked, stop iteration
-    Sent = 0x3,  // Waked with message direct copied
-    Next = 0x2,  // Waked, but have to continued for more iteration
+    Woken = 0x1, // Woken, stop iteration
+    Sent = 0x3,  // Woken with message direct copied
+    Next = 0x2,  // Woken, but have to continued for more iteration
     Skip = 0x4,  // Waker Cancelled or Done
 }
 
@@ -191,7 +191,7 @@ impl<P> WakerInner<P> {
             if _state != WakerState::Closed as u8 {
                 let __state = self.get_state_relaxed();
                 assert!(
-                    __state == WakerState::Waked as u8 || __state <= _state as u8,
+                    __state == WakerState::Woken as u8 || __state <= _state as u8,
                     "unexpected set state {:?} on state: {}",
                     _state,
                     __state
@@ -211,7 +211,7 @@ impl<P> WakerInner<P> {
     /// Return current status,
     /// Closed: might be channel closed, or future successfully cancelled, the future should drop message; try to clear its waker.
     /// Done: the message actually sent, nothing to DO
-    /// Waked: the future should drop message, and waked another counterpart.
+    /// Woken: the future should drop message, and wake another counterpart.
     #[inline(always)]
     pub fn abandon(&self) -> Result<(), u8> {
         // it will content with close(), on_recv(), on_send()
@@ -277,16 +277,16 @@ impl<P> WakerInner<P> {
         // both >= WakerState::Waiting is certain
         let mut state = self.get_state_relaxed();
         loop {
-            if state >= WakerState::Waked as u8 {
+            if state >= WakerState::Woken as u8 {
                 return WakeResult::Skip;
             } else if state == WakerState::Waiting as u8 {
-                self.state.store(WakerState::Waked as u8, Ordering::SeqCst);
+                self.state.store(WakerState::Woken as u8, Ordering::SeqCst);
                 self._wake_nolock();
-                return WakeResult::Waked;
+                return WakeResult::Woken;
             } else {
                 match self.state.compare_exchange_weak(
                     WakerState::Init as u8,
-                    WakerState::Waked as u8,
+                    WakerState::Woken as u8,
                     Ordering::SeqCst,
                     Ordering::Acquire,
                 ) {
@@ -340,14 +340,14 @@ impl<T> WakerInner<*const T> {
         // both >= WakerState::Waiting is certain
         let mut state = self.get_state_relaxed();
         loop {
-            if state >= WakerState::Waked as u8 {
+            if state >= WakerState::Woken as u8 {
                 return WakeResult::Skip;
             } else if state == WakerState::Waiting as u8 {
                 let p = self.get_payload();
                 if p == std::ptr::null_mut() {
-                    self.state.store(WakerState::Waked as u8, Ordering::SeqCst);
+                    self.state.store(WakerState::Woken as u8, Ordering::SeqCst);
                     self._wake_nolock();
-                    return WakeResult::Waked;
+                    return WakeResult::Woken;
                 }
                 state = copy_f(p as *const T);
                 self.state.store(state as u8, Ordering::SeqCst);
@@ -355,12 +355,12 @@ impl<T> WakerInner<*const T> {
                 if state == WakerState::Done as u8 {
                     return WakeResult::Sent;
                 } else {
-                    return WakeResult::Waked;
+                    return WakeResult::Woken;
                 }
             } else {
                 match self.state.compare_exchange_weak(
                     WakerState::Init as u8,
-                    WakerState::Waked as u8,
+                    WakerState::Woken as u8,
                     Ordering::SeqCst,
                     Ordering::Acquire,
                 ) {
@@ -397,7 +397,7 @@ impl<P: Copy> WakerCache<P> {
 
     #[inline(always)]
     pub(crate) fn push(&self, waker: ChannelWaker<P>) {
-        debug_assert!(waker.get_state() >= WakerState::Waked as u8);
+        debug_assert!(waker.get_state() >= WakerState::Woken as u8);
         let a = waker.to_arc();
         if Arc::weak_count(&a) == 0 && Arc::strong_count(&a) == 1 {
             self.0.try_put(a);

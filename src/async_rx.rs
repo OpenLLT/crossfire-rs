@@ -222,7 +222,7 @@ impl<T> AsyncRx<T> {
                     shared.on_recv();
                     if let Some(waker) = o_waker.take() {
                         trace_log!("rx{:?}: recv {:?} {}", tokio_task_id!(), waker, $state);
-                        if $state < WakerState::Waked as u8 {
+                        if $state < WakerState::Woken as u8 {
                             shared.recvs.cancel_waker(&waker);
                         }
                     } else {
@@ -233,24 +233,24 @@ impl<T> AsyncRx<T> {
             };
         }
         loop {
-            try_recv!(WakerState::Waked as u8);
+            try_recv!(WakerState::Woken as u8);
             if let Some(waker) = o_waker.as_ref() {
-                match waker.try_change_state(WakerState::Waked, WakerState::Init) {
+                match waker.try_change_state(WakerState::Woken, WakerState::Init) {
                     Ok(_) => {
                         if !waker.will_wake(ctx) {
                             let _ = o_waker.take();
                         }
                     }
                     Err(state) => {
-                        if state < WakerState::Waked as u8 {
+                        if state < WakerState::Woken as u8 {
                             if waker.will_wake(ctx) {
-                                // Spurious waked by runtime, or
+                                // Spurious woken by runtime, or
                                 // Normally only selection or multiplex future will get here.
                                 // No need to reg again, since waker is not consumed.
                                 trace_log!("rx{:?}: will_wake {:?}", tokio_task_id!(), waker);
                                 break;
                             } else {
-                                // Spurious waked by runtime, waker can not be re-used (issue 38)
+                                // Spurious woken by runtime, waker can not be re-used (issue 38)
                                 shared.recvs.cancel_waker(&waker);
                                 trace_log!("rx{:?}: drop waker {:?}", tokio_task_id!(), waker);
                                 let _ = o_waker.take(); // waker cannot be used again
@@ -293,7 +293,7 @@ impl<T> AsyncRx<T> {
                 let _waker = o_waker.as_ref().unwrap();
                 let state = _waker.commit_waiting();
                 trace_log!("rx{:?}: commit_waiting {:?} {}", tokio_task_id!(), _waker, state);
-                if state == WakerState::Waked as u8 {
+                if state == WakerState::Woken as u8 {
                     continue;
                 }
             }

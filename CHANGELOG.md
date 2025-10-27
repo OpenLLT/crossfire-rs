@@ -356,7 +356,7 @@ Runtime will spuriously wake up with changed Waker.
 
 From <http://github.com/qingstor/crossfire-rs> to <https://github.com/frostyplanet/crossfire-rs>
 
-- Change rust edition to 2024, re-format the code and fix warnnings.
+- Change rust edition to 2024, re-format the code and fix warnings.
 
 
 ## [1.0.1] - 2023-08-29

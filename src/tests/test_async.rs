@@ -1019,7 +1019,7 @@ fn test_spurious_sink(setup_log: ()) {
             println!("spawn normal");
             th_s.push(tokio::spawn(async move { spawn_tx(_tx, true).await }));
             sleep(Duration::from_secs(1)).await;
-            println!("recv 1 to make the 2 senders waked");
+            println!("recv 1 to wake the 2 senders in Init state");
             assert_eq!(rx.recv().await.expect("recv"), 0);
             for th in th_s {
                 let _ = async_join_result!(th);

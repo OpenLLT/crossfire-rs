@@ -250,21 +250,21 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 return Poll::Ready(Ok(()));
             }
             if let Some(waker) = o_waker.as_ref() {
-                match waker.try_change_state(WakerState::Waked, WakerState::Init) {
+                match waker.try_change_state(WakerState::Woken, WakerState::Init) {
                     Ok(_) => {
                         if !waker.will_wake(ctx) {
                             let _ = o_waker.take();
                         }
                     }
                     Err(state) => {
-                        if state < WakerState::Waked as u8 {
+                        if state < WakerState::Woken as u8 {
                             if waker.will_wake(ctx) {
                                 trace_log!("tx{:?}: will_wake {:?}", tokio_task_id!(), waker);
                                 // Normally only selection or multiplex future will get here.
                                 // No need to reg again, since waker is not consumed.
                                 return Poll::Pending;
                             } else {
-                                // Spurious waked by runtime, waker can not be re-used (issue 38)
+                                // Spurious woken by runtime, waker can not be re-used (issue 38)
                                 self.senders.cancel_waker(waker);
                                 trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
                                 let _ = o_waker.take();
@@ -296,9 +296,9 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 shared.sender_reg_and_try(item, waker, sink)
             };
             trace_log!("tx{:?}: sender_reg_and_try {:?} {}", tokio_task_id!(), o_waker, state);
-            if state < WakerState::Waked as u8 {
+            if state < WakerState::Woken as u8 {
                 return Poll::Pending;
-            } else if state > WakerState::Waked as u8 {
+            } else if state > WakerState::Woken as u8 {
                 if state == WakerState::Done as u8 {
                     trace_log!("tx{:?}: send {:?} done", o_waker, tokio_task_id!());
                     let _ = o_waker.take();
@@ -310,7 +310,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     return Poll::Ready(Err(()));
                 }
             }
-            debug_assert_eq!(state, WakerState::Waked as u8);
+            debug_assert_eq!(state, WakerState::Woken as u8);
             continue;
         }
     }

@@ -119,7 +119,7 @@ impl<T> Rx<T> {
             let waker = self.waker_cache.new_blocking(());
             let mut state;
             'MAIN: loop {
-                if waker.get_state() == WakerState::Waked as u8 {
+                if waker.get_state() == WakerState::Woken as u8 {
                     waker.reset_init();
                 }
                 shared.reg_recv(&waker);

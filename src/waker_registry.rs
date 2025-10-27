@@ -79,8 +79,8 @@ impl<T> RegistrySender<T> {
         match self {
             RegistrySender::Multi(inner) => {
                 let cur_state = waker.get_state_relaxed();
-                // If we se Waked here, only possible otherside has waked it
-                if cur_state >= WakerState::Waked as u8 {
+                // If we se Woken here, only possible otherside has woken it
+                if cur_state >= WakerState::Woken as u8 {
                     if cur_state < state as u8 {
                         waker.set_state_relaxed(state);
                         trace_log!("tx: cancel_reuse {:?} {:?}", waker, state);
@@ -127,8 +127,8 @@ impl<T> RegistrySender<T> {
         match self {
             RegistrySender::Multi(inner) => {
                 let cur_state = waker.get_state_relaxed();
-                // If we se Waked here, only possible otherside has waked it
-                if cur_state >= WakerState::Waked as u8 {
+                // If we se Woken here, only possible otherside has woken it
+                if cur_state >= WakerState::Woken as u8 {
                     return;
                 }
                 inner.clear_wakers(&waker, true, "tx");
@@ -233,8 +233,8 @@ impl RegistryRecv {
     pub fn cancel_waker(&self, waker: &RecvWaker) {
         match self {
             RegistryRecv::Multi(inner) => {
-                // If we se Waked here, only possible otherside has waked it
-                if waker.get_state_relaxed() >= WakerState::Waked as u8 {
+                // If we se Woken here, only possible otherside has woken it
+                if waker.get_state_relaxed() >= WakerState::Woken as u8 {
                     return;
                 }
                 inner.clear_wakers(waker, true, "rx");
@@ -513,13 +513,13 @@ mod tests {
         if let Some((w, _)) = reg.pop() {
             assert!(w.wake() == WakeResult::Next);
         }
-        assert_eq!(waker1.get_state(), WakerState::Waked as u8);
+        assert_eq!(waker1.get_state(), WakerState::Woken as u8);
         assert_eq!(reg.len(), 1);
         assert_eq!(reg.is_empty(), false);
         if let Some((w, _)) = reg.pop() {
-            assert!(w.wake() == WakeResult::Waked);
+            assert!(w.wake() == WakeResult::Woken);
         }
-        assert_eq!(waker2.get_state(), WakerState::Waked as u8);
+        assert_eq!(waker2.get_state(), WakerState::Woken as u8);
         assert_eq!(reg.len(), 0);
         assert_eq!(reg.is_empty(), true);
     }
@@ -536,7 +536,7 @@ mod tests {
         reg.reg_waker(&waker4); // Init
         assert_eq!(waker4.get_state(), WakerState::Init as u8);
         let num_workers = reg.len();
-        // Because waker3 not waked up, waker4 is not clear
+        // Because waker3 not woken up, waker4 is not clear
         reg.clear_wakers(&waker4, false, "rx");
         assert_eq!(reg.len(), num_workers);
         for _ in 0..10 {
@@ -566,7 +566,7 @@ mod tests {
         println!("clear waker4 oneshot seq {}", waker4.get_seq());
         reg.clear_wakers(&waker4, true, "rx"); // oneshot only clear waker3
         assert_eq!(reg.len(), num_workers - 1);
-        assert!(waker3.get_state() >= WakerState::Waked as u8);
+        assert!(waker3.get_state() >= WakerState::Woken as u8);
         assert_eq!(waker4.get_state(), WakerState::Waiting as u8);
     }
 

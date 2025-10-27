@@ -291,7 +291,7 @@ impl<T> ChannelShared<T> {
                     if self.is_disconnected() {
                         return (WakerState::Closed as u8, None);
                     } else {
-                        // outside logic only regconize Waiting
+                        // outside logic only recognize Waiting
                         return (WakerState::Waiting as u8, Some(waker));
                     }
                 } else {
@@ -307,7 +307,7 @@ impl<T> ChannelShared<T> {
             }
         } else {
             // Unlikely to be disconnected,
-            return self.senders.cancel_reuse_waker(waker, WakerState::Waked);
+            return self.senders.cancel_reuse_waker(waker, WakerState::Woken);
         }
     }
 
@@ -318,7 +318,7 @@ impl<T> ChannelShared<T> {
         backoff.reset();
         loop {
             let state = waker.get_state_relaxed();
-            if state >= WakerState::Waked as u8 {
+            if state >= WakerState::Woken as u8 {
                 return state;
             }
             if backoff.snooze() {
@@ -348,7 +348,7 @@ impl<T> ChannelShared<T> {
                 if unsafe { inner.push_with_ptr(p) } {
                     WakerState::Done as u8
                 } else {
-                    WakerState::Waked as u8
+                    WakerState::Woken as u8
                 }
             } else {
                 unreachable!();
@@ -368,8 +368,8 @@ impl<T> ChannelShared<T> {
             }
             Err(state) => {
                 trace_log!("tx: abandon err  {:?} {}", waker, state);
-                if state == WakerState::Waked as u8 {
-                    // We are waked, but give up sending, should notify another sender for safety
+                if state == WakerState::Woken as u8 {
+                    // We are awake, but give up sending, should notify another sender for safety
                     self.on_recv();
                     return true;
                 } else if state == WakerState::Closed as u8 {
@@ -398,8 +398,8 @@ impl<T> ChannelShared<T> {
             }
             Err(state) => {
                 trace_log!("rx: abandon err {:?} {}", waker, state);
-                if state == WakerState::Waked as u8 {
-                    // We are waked, but give up receiving, should notify another receiver for safety
+                if state == WakerState::Woken as u8 {
+                    // We are awake, but give up receiving, should notify another receiver for safety
                     self.on_send();
                     return true;
                 } else if state == WakerState::Closed as u8 {
