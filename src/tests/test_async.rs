@@ -893,11 +893,11 @@ fn test_pressure_bounded_mixed_async_blocking_conversion(
         for th in co_tx {
             let _ = async_join_result!(th);
         }
-        for th in th_tx {
-            let _ = th.join().unwrap();
-        }
         for th in co_rx {
             recv_counter += async_join_result!(th);
+        }
+        for th in th_tx {
+            let _ = th.join().unwrap();
         }
         for th in th_rx {
             recv_counter += th.join().unwrap();
