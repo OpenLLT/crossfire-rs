@@ -74,8 +74,8 @@ Some hidden bug (especially atomic ops on weaker ordering platform) might occur:
 </tr>
 <tr><td>tokio 1.47.1</td>
 <td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_tokio_x86.yml">cron_master_tokio_x86</a></td>
-<td>STABLE with MULTI-THREADED runtime.<br/>
- <a href="https://github.com/frostyplanet/crossfire-rs/issues/39#issuecomment-3404391943">rare deadlock</a> happen with CURRENT-THREADED runtime</td>
+<td>STABLE<br/>
+</td>
 </tr>
 <tr><td>async-std</td>
 <td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_async_std_x86.yml">cron_master_async_std_x86</a></td>
@@ -95,11 +95,10 @@ Some hidden bug (especially atomic ops on weaker ordering platform) might occur:
 <td>tokio >= 1.48 (<a href="https://github.com/tokio-rs/tokio/pull/7622">tokio PR #7622</a>)
 </td>
 <td>
-<a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_dev_arm.yml">cron_dev_arm</a><br/>
-<a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_dev_arm_trace.yml">cron_dev_arm with trace_log</a>
+<a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_tokio_arm.yml">cron_master_tokio_arm</a><br/>
 </td>
-<td> PASSED with MULTI-THREADED runtime<br/>
- AVOID CURRENT-THREAD runtime (remaining issue: <a href="https://github.com/tokio-rs/tokio/issues/7632">tokio issue 7632 (opened)</a>
+<td> SHOULD UPGRADE tokio to 1.48<br/>
+CURRENT-THREAD runtime still verifying
  </td>
 </tr>
 <tr>
@@ -115,10 +114,12 @@ Some hidden bug (especially atomic ops on weaker ordering platform) might occur:
 <tr>
 <td rowspan="4">miri (emulation)</td>
 <td>threaded</td>
-<td rowspan="2"><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/miri_dev.yml">miri_dev</a></td>
+<td rowspan="2"><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/miri_tokio.yml">miri_tokio</a><br />
+<a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/miri_tokio_cur.yml">miri_tokio_cur</a>
+</td>
 <td>STABLE</td>
 </tr>
-<tr><td>tokio</td><td> DEBUGGING (see above)</td>
+<tr><td>tokio</td><td>still verifying </td>
 </tr>
 <tr><td>async-std</td><td>-</td> <td> (timerfd_create) not supported by miri </td>
 </tr>
